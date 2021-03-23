@@ -1,5 +1,5 @@
 # Container image that runs your code
-FROM goodnickoff/taorelease:0.0.5
+FROM goodnickoff/taorelease:0.0.6
 
 # Copies your code file from your action repository to the filesystem path `/` of the container
 COPY entrypoint.sh /entrypoint.sh
