@@ -12,6 +12,6 @@ Version released
 
 ## Example usage
 
-uses: oat-sa/conventional-commit-action@v0
+uses: oat-sa/extension-release-action@v0
 with:
   github_token: ${{ secrets.GITHUB_TOKEN }}
