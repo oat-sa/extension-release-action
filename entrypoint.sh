@@ -22,6 +22,7 @@ touch taoQtiItem/views/js/mathjax/MathJax.js
 touch index.php
 echo $MESSAGES_JSON > tao/views/locales/en-US/messages.json
 ls -la
+pwd
 cd $EXT_ID
 git config --global user.name github-actions
 git config --global user.email github-actions@github.com
