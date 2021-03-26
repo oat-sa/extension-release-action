@@ -31,6 +31,8 @@ git remote set-url --push origin https://${GITHUB_TOKEN}@github.com/$REPO_NAME.g
 git checkout .
 cd ..
 
+ls -la
+
 echo "Release extension $EXT_ID"
 
 TAO_RELEASE_OUTPUT=$(taoRelease extensionRelease --extension-to-release ${EXT_ID} --no-interactive --no-write)
