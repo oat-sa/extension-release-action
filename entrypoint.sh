@@ -21,6 +21,7 @@ mkdir -p config/
 touch taoQtiItem/views/js/mathjax/MathJax.js
 touch index.php
 echo $MESSAGES_JSON > tao/views/locales/en-US/messages.json
+ls -la
 cd $EXT_ID
 git config --global user.name github-actions
 git config --global user.email github-actions@github.com
@@ -30,9 +31,7 @@ git config --global url."https://github.com/".insteadOf ssh://git@github.com/
 git remote set-url --push origin https://${GITHUB_TOKEN}@github.com/$REPO_NAME.git
 git checkout .
 cd ..
-
 ls -la
-
 echo "Release extension $EXT_ID"
 
 TAO_RELEASE_OUTPUT=$(taoRelease extensionRelease --extension-to-release ${EXT_ID} --no-interactive --no-write)
