@@ -5,6 +5,12 @@ MESSAGES_JSON='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations
 REPO_NAME=$(jq --raw-output '."name"' composer.json)
 EXT_ID=$(jq --raw-output '.extra."tao-extension-name"' composer.json)
 
+echo "Copy auxiliary scripts"
+
+cp /generateComposerFile.php /github/workspace/generateComposerFile.php
+cp /getExitCode.php /github/workspace/getExitCode.php
+cp /getOutput.php /github/workspace/getOutput.php
+
 echo "Prepare composer file ..."
 
 COMPOSER_GENERATION_OUTPUT=$(php generateComposerFile.php)
@@ -21,8 +27,8 @@ mkdir -p config/
 touch taoQtiItem/views/js/mathjax/MathJax.js
 touch index.php
 echo $MESSAGES_JSON > tao/views/locales/en-US/messages.json
-ls -la
 pwd
+ls -la
 cd $EXT_ID
 git config --global user.name github-actions
 git config --global user.email github-actions@github.com
@@ -32,6 +38,7 @@ git config --global url."https://github.com/".insteadOf ssh://git@github.com/
 git remote set-url --push origin https://${GITHUB_TOKEN}@github.com/$REPO_NAME.git
 git checkout .
 cd ..
+pwd
 ls -la
 echo "Release extension $EXT_ID"
 
