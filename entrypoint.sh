@@ -33,6 +33,7 @@ git config --global user.email github-actions@github.com
 git config --global url."https://github.com/".insteadOf git@github.com:
 git config --global url."https://".insteadOf git://
 git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+git remote set-url origin https://${GITHUB_TOKEN}@github.com/$REPO_NAME.git
 git remote set-url --push origin https://${GITHUB_TOKEN}@github.com/$REPO_NAME.git
 git checkout .
 cd ..
