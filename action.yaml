@@ -1,0 +1,13 @@
+# action.yml
+name: 'Tao release'
+description: 'Release Tao extension'
+inputs:
+  github_token:
+    description: 'Github token'
+    required: true
+outputs:
+  release_result:
+    description: 'result message: success|skip|failure'
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
