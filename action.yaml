@@ -5,6 +5,9 @@ inputs:
   github_token:
     description: 'Github token'
     required: true
+  npm_token:
+    description: 'NPM token'
+    required: true
 outputs:
   release_result:
     description: 'result message: success|skip|failure'
