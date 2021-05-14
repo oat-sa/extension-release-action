@@ -7,7 +7,7 @@ inputs:
     required: true
   npm_token:
     description: 'NPM token'
-    required: true
+    required: false
 outputs:
   release_result:
     description: 'result message: success|skip|failure'
