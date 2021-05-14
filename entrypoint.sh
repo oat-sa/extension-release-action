@@ -15,7 +15,7 @@ cp /getOutput.php /github/workspace/getOutput.php
 
 echo "Prepare NPM ..."
 
-echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+npm config set //registry.npmjs.org/:_authToken=${NPM_TOKEN}
 
 echo "Prepare composer file ..."
 
