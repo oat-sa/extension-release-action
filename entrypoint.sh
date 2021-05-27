@@ -17,6 +17,10 @@ echo "Prepare NPM ..."
 
 npm config set //registry.npmjs.org/:_authToken=${NPM_TOKEN}
 
+echo "Upgrade taoRelease ..."
+
+npm update -g @oat-sa/tao-extension-release
+
 echo "Prepare composer file ..."
 
 COMPOSER_GENERATION_OUTPUT=$(php generateComposerFile.php)
