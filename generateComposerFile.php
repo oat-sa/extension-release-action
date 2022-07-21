@@ -2,7 +2,7 @@
 
 $composerArray = json_decode(file_get_contents('./composer.json'), true);
 $packageName = $composerArray["name"];
-$composerArray["require"][$packageName] = 'dev-develop';
+$composerArray["require"][$packageName] = 'dev-develop as v99.99.99';
 $composerArray["repositories"] = array_key_exists("repositories", $composerArray) ? $composerArray["repositories"] : [];
 $composerArray["repositories"][] = [
     "type" => "vcs",
