@@ -8,6 +8,11 @@ $composerArray["repositories"][] = [
     "type" => "vcs",
     "url" => "https://github.com/".$composerArray["name"].".git"
 ];
+
+$composerArray['config'] = $composerArray['config'] ?? [];
+$composerArray['config']['allow-plugins'] = $composerArray['config']['allow-plugins'] ?? [];
+$composerArray['config']['allow-plugins']['oat-sa/*'] = true;
+
 unset($composerArray['name']);
 file_put_contents('./composer-release.json', json_encode($composerArray, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
