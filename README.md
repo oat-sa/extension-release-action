@@ -35,3 +35,40 @@ jobs:
           github_token: ${{ secrets.GH_TOKEN }}
 ```
 
+## Publishing
+
+Actions are released as tags:
+- one tag that reflects the exact version
+- a major version tag that points to the last tag of that version
+
+For example, when releasing the version `v1.2.3`, ensure the tag `v1` points to that version as well.
+Check the code example bellow:
+
+```shell
+git fetch
+git checkout main
+git pull
+git tag -d v1
+git tag v1
+git push origin :v1
+git push origin v1
+```
+
+## Releasing tao-release Docker image
+
+1) Login as a user that has access and execute:
+
+```shell
+cd docker
+docker build -f Dockerfile-tao-release . -t taotesting/tao-release:1.0
+
+docker tag taotesting/tao-release:1.0 taotesting/tao-release:1.0
+docker push taotesting/tao-release:1.0
+
+docker tag taotesting/tao-release:1.0 taotesting/tao-release:latest
+docker push taotesting/tao-release:latest
+```
+
+2) Check if the image is there
+
+Access [docker hub](https://hub.docker.com/repository/docker/taotesting/tao-release).
