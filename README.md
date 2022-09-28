@@ -61,8 +61,12 @@ git push origin v1
 ```shell
 cd docker
 docker build -f Dockerfile-tao-release . -t taotesting/tao-release:1.0
+
 docker tag taotesting/tao-release:1.0 taotesting/tao-release:1.0
 docker push taotesting/tao-release:1.0
+
+docker tag taotesting/tao-release:1.0 taotesting/tao-release:latest
+docker push taotesting/tao-release:latest
 ```
 
 2) Check if the image is there
