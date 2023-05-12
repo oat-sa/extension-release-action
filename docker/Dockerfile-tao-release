@@ -1,7 +1,7 @@
 #
 # Dockerfile used to generate https://hub.docker.com/repository/docker/taotesting/tao-release
 #
-FROM ubuntu:18.04
+FROM ubuntu:20.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV COMPOSER_ALLOW_SUPERUSER=1
@@ -12,7 +12,7 @@ RUN apt-get install -y software-properties-common
 RUN apt-add-repository ppa:ondrej/php
 RUN apt-get update
 RUN apt-get install -y php7.4 php7.4-pdo php7.4-mbstring php7.4-dom php7.4-zip php7.4-gd php7.4-curl npm git jq python3 g++ make curl
-RUN curl -sL https://deb.nodesource.com/setup_12.x | bash
+RUN curl -sL https://deb.nodesource.com/setup_18.x | bash
 RUN apt-get install -y nodejs
 RUN npm i -g @oat-sa/tao-extension-release
 RUN curl -sS https://getcomposer.org/installer -o composer-setup.php
