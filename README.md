@@ -59,22 +59,10 @@ git push origin v1
 
 ## Releasing tao-release Docker image
 
-1. Login as a user that has access and execute:
-
-```shell
-cd docker
-docker build -f Dockerfile-tao-release . -t taotesting/tao-release:1.0
-
-docker tag taotesting/tao-release:1.0 taotesting/tao-release:1.0
-docker push taotesting/tao-release:1.0
-
-docker tag taotesting/tao-release:1.0 taotesting/tao-release:latest
-docker push taotesting/tao-release:latest
-```
-
+1. Release image on the base-image side: https://github.com/oat-sa/base-images/blob/develop/php/php-v8.3-tao-release.Dockerfile
 2. Check if the image is there
 
-Access [docker hub](https://hub.docker.com/repository/docker/taotesting/tao-release).
+Access [gcr](https://console.cloud.google.com/artifacts/docker/tao-artefacts/europe-west1/base-images/php-v8.3-tao-release?inv=1&invt=AbinXQ).
 
 ## Creating and publishing a multi arch image
 
