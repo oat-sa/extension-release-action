@@ -1,5 +1,5 @@
 # Container image that runs your code
-FROM FROM europe-west1-docker.pkg.dev/tao-artefacts/base-images/php-v8.3-tao-release:latest
+FROM europe-west1-docker.pkg.dev/tao-artefacts/base-images/php-v8.3-tao-release:latest
 
 # Copies your code file from your action repository to the filesystem path `/` of the container
 COPY entrypoint.sh /entrypoint.sh
