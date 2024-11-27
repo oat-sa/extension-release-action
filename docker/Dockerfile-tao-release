@@ -11,7 +11,7 @@ RUN apt-get update
 RUN apt-get install -y software-properties-common
 RUN apt-add-repository ppa:ondrej/php
 RUN apt-get update
-RUN apt-get install -y php7.4 php7.4-pdo php7.4-mbstring php7.4-dom php7.4-zip php7.4-gd php7.4-curl npm git jq python3 g++ make curl
+RUN apt-get install -y php8.3 php8.3-pdo php8.3-mbstring php8.3-dom php8.3-zip php8.3-gd php8.3-curl npm git jq python3 g++ make curl
 RUN curl -sL https://deb.nodesource.com/setup_18.x | bash
 RUN apt-get install -y nodejs
 RUN npm i -g @oat-sa/tao-extension-release
