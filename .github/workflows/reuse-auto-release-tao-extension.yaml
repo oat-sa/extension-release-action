@@ -228,13 +228,14 @@ jobs:
 
       - name: Verify backport checkout
         if: inputs.BACKPORT
+        env:
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
         run: |
           CURRENT_BRANCH="$(git branch --show-current)"
-          EXPECTED_BRANCH="${{ inputs.RELEASE_REF }}"
 
           echo "Checked out branch: ${CURRENT_BRANCH}"
-          if [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
-            echo "::error::Expected backport source branch '${EXPECTED_BRANCH}', but checked out '${CURRENT_BRANCH}'."
+          if [ "$CURRENT_BRANCH" != "$RELEASE_REF" ]; then
+            echo "::error::Expected backport source branch '${RELEASE_REF}', but checked out '${CURRENT_BRANCH}'."
             exit 1
           fi
 
