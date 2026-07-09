@@ -106,7 +106,7 @@ on:
         description: 'PHP version used for composer install before TAO release preparation.'
         required: false
         type: string
-        default: '8.1'
+        default: '8.3'
       TAO_COMPOSER_INSTALL_COMMAND:
         description: 'Optional command to install PHP dependencies before frontend build. Leave empty to run composer install automatically when composer.json exists under TAO_ROOT_PATH.'
         required: false
@@ -484,8 +484,6 @@ jobs:
           MAJOR=${VERSION_PARTS[0]}
           MINOR=${VERSION_PARTS[1]}
           PATCH=${VERSION_PARTS[2]}
-          COMMITS="${{ env.COMMITS }}"
-          HAS_BREAKING_CHANGE="${{ env.HAS_BREAKING_CHANGE }}"
 
           echo "Generating tag for commits: $COMMITS"
 
