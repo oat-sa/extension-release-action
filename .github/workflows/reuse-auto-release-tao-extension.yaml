@@ -1,0 +1,1952 @@
+name: Auto Release TAO Extension (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      ENABLED:
+        description: 'Enable the release workflow. Set to true to run releases (including manual workflow_dispatch runs).'
+        required: false
+        type: boolean
+        default: false
+      DEV_BRANCH:
+        description: 'Development branch name (source for releases)'
+        required: false
+        type: string
+        default: develop
+      MAIN_BRANCH:
+        description: 'Main/production branch name'
+        required: false
+        type: string
+        default: master
+      BOT_USER_NAME:
+        description: 'Git bot user name for commits'
+        required: false
+        type: string
+        default: oat-github-bot
+      BOT_USER_EMAIL:
+        description: 'Git bot user email for commits'
+        required: false
+        type: string
+        default: oat-github-bot@taotesting.com
+      SKIP_MERGE_BACK:
+        description: 'Skip merging the release to MAIN_BRANCH. Automatically enabled when BACKPORT is true. When SINGLE_RELEASE_PR is true and MAIN_BRANCH differs from DEV_BRANCH, the release PR targets DEV_BRANCH instead of MAIN_BRANCH.'
+        required: false
+        type: boolean
+        default: false
+      SINGLE_RELEASE_PR:
+        description: 'Use one release pull request that includes source changes and generated assets instead of separate asset and merge-back PRs.'
+        required: false
+        type: boolean
+        default: true
+      VERSION_PREFIX:
+        description: 'Prefix for version tags (e.g., "v" for v1.0.0, empty for 1.0.0)'
+        required: false
+        type: string
+        default: 'v'
+      RELEASE_VERSION:
+        description: 'Explicit release version (e.g. 1.2.3 or 1.2.3.4, with or without VERSION_PREFIX). Required for backports when you need a specific tag. Skips semver auto-bump and allows release even without new commits since the last tag.'
+        required: false
+        type: string
+        default: ''
+      TAO_BUILD_FE:
+        description: 'Frontend bundle build mode. auto: build only when frontend source files changed; yes/true: always build; no/false: never build.'
+        required: false
+        type: string
+        default: 'auto'
+      TAO_BUILD_LOCALE:
+        description: 'Locale compilation mode. auto: compile only when .po files changed; yes/true: always compile (all extension locales when none changed); no/false: never compile.'
+        required: false
+        type: string
+        default: 'auto'
+      RELEASE_REF:
+        description: 'Git ref branch to release from. For backports, set to the release branch (e.g. release-2026-02).'
+        required: false
+        type: string
+        default: develop
+      BACKPORT:
+        description: 'Backport release mode. Requires RELEASE_REF (backport branch) and RELEASE_VERSION. Tags the backport branch only — never merges to MAIN_BRANCH or DEV_BRANCH. GitHub release is not marked as latest.'
+        required: false
+        type: boolean
+        default: false
+      BASE_TAG:
+        description: 'Optional tag baseline for backports on older release branches (e.g. v1.2.3 or v1.2.3.4). When set without BACKPORT, bumps the 3rd segment (v1.2.3 -> v1.2.4).'
+        required: false
+        type: string
+        default: ''
+      TAG_DISCOVERY_SCOPE:
+        description: 'How to discover the latest tag when BASE_TAG is not provided. Use "all" for all repository tags, or "reachable" for tags merged into RELEASE_REF only.'
+        required: false
+        type: string
+        default: 'all'
+      TAO_ROOT_PATH:
+        description: 'Path to the TAO workspace root. Relative paths are resolved from the repository root.'
+        required: false
+        type: string
+        default: '.'
+      TAO_EXTENSION_NAME:
+        description: 'TAO extension name used to derive default bundle and sass task names.'
+        required: true
+        type: string
+      TAO_EXTENSION_PATH:
+        description: 'Optional path to the extension root relative to the repository root. When omitted, the workflow auto-detects manifest.php under TAO_ROOT_PATH or the repository root.'
+        required: false
+        type: string
+        default: ''
+      TAO_BUILD_WORKDIR:
+        description: 'TAO frontend build working directory relative to TAO_ROOT_PATH.'
+        required: false
+        type: string
+        default: 'tao/views/build'
+      NODE_VERSION:
+        description: 'Node.js version used to install frontend build tooling and run grunt bundle tasks.'
+        required: false
+        type: string
+        default: '18'
+      PHP_VERSION:
+        description: 'PHP version used for composer install before TAO release preparation.'
+        required: false
+        type: string
+        default: '8.3'
+      TAO_COMPOSER_INSTALL_COMMAND:
+        description: 'Optional command to install PHP dependencies before frontend build. Leave empty to run composer install automatically when composer.json exists under TAO_ROOT_PATH.'
+        required: false
+        type: string
+        default: ''
+      TAO_COMPOSER_ALLOW_PLUGINS:
+        description: 'Comma-separated Composer plugin package names to allow before install (required by Composer 2.2+).'
+        required: false
+        type: string
+        default: 'oat-sa/oatbox-extension-installer,oat-sa/composer-npm-bridge'
+      TAO_BUILD_SETUP_COMMAND:
+        description: 'Optional command to prepare the TAO build environment before running bundle or sass tasks.'
+        required: false
+        type: string
+        default: ''
+      TAO_JS_BUNDLE_COMMAND:
+        description: 'Optional command to build extension JavaScript bundles. Overrides the derived default.'
+        required: false
+        type: string
+        default: ''
+      TAO_CSS_BUNDLE_COMMAND:
+        description: 'Optional command to build extension CSS or SASS assets. Overrides the derived default.'
+        required: false
+        type: string
+        default: ''
+      TAO_LOCALE_COMPILE_COMMAND:
+        description: 'Optional command to compile extension locale assets before tagging. When empty and PO files changed in the release, runs php tao/scripts/taoTranslate.php -v -a compile -e <TAO_EXTENSION_NAME> -l <locale> with TAO_TRANSLATE_STANDALONE=1 for each changed locale.'
+        required: false
+        type: string
+        default: ''
+      TAO_COMMIT_GENERATED_FILES:
+        description: 'Commit tracked generated files before tagging.'
+        required: false
+        type: boolean
+        default: true
+      TAO_GENERATED_FILES_COMMIT_MESSAGE:
+        description: 'Commit message for generated TAO release assets. [skip ci] is enforced automatically.'
+        required: false
+        type: string
+        default: 'chore: prepare release assets [skip ci]'
+      TAO_FE_FILE_PATTERNS:
+        description: 'Extended regex matched against changed file paths to decide if frontend bundle preparation is required.'
+        required: false
+        type: string
+        default: '\.(js|jsx|ts|tsx|mjs|cjs|css|scss|sass|less|vue|html|tpl)$|views/build/'
+      TAO_LOCALE_FILE_PATTERNS:
+        description: 'Extended regex matched against changed file paths to decide if locale compilation is required.'
+        required: false
+        type: string
+        default: '\.po$'
+      SLACK_NOTIFICATION:
+        description: 'Send Slack notification when the release finishes (success, skipped, or failed).'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      SEMVER_GH_TOKEN:
+        description: 'GitHub token with permissions to create tags, releases, and PRs. If not provided, uses the default GITHUB_TOKEN.'
+        required: false
+      SEMVER_SLACK_TOKEN:
+        description: 'Slack bot token for release notifications. Required if SLACK_NOTIFICATION is true.'
+        required: false
+      SEMVER_SLACK_CHANNEL:
+        description: 'Slack channel ID for release notifications. Required if SLACK_NOTIFICATION is true.'
+        required: false
+
+concurrency:
+  group: auto-release-tao-extension-${{ github.repository }}-${{ inputs.RELEASE_REF }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan release
+    runs-on: ubuntu-latest
+    if: ${{ inputs.ENABLED }}
+    permissions:
+      contents: read
+
+    outputs:
+      new_tag: ${{ steps.new_version.outputs.NEW_TAG }}
+      latest_tag: ${{ steps.get_latest_tag.outputs.LATEST_TAG }}
+      skip_release: ${{ steps.get_commit_messages.outputs.SKIP_RELEASE }}
+      needs_fe_build: ${{ steps.detect_fe_changes.outputs.NEEDS_FE_BUILD }}
+      needs_locale_compile: ${{ steps.detect_locale_changes.outputs.NEEDS_LOCALE_COMPILE }}
+      changed_locales: ${{ steps.detect_locale_changes.outputs.CHANGED_LOCALES }}
+
+    steps:
+      - name: Validate backport inputs
+        if: inputs.BACKPORT
+        env:
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
+          DEV_BRANCH: ${{ inputs.DEV_BRANCH }}
+          RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RELEASE_VERSION" ]; then
+            echo "::error::BACKPORT requires RELEASE_VERSION (e.g. 0.1.9.2 — not a branch name)."
+            exit 1
+          fi
+
+          if echo "$RELEASE_VERSION" | grep -q '/'; then
+            echo "::error::RELEASE_VERSION must be a version number (e.g. 0.1.9.2), not a branch name ('${RELEASE_VERSION}')."
+            exit 1
+          fi
+
+          if [ "$RELEASE_REF" = "$DEV_BRANCH" ]; then
+            echo "::error::BACKPORT requires RELEASE_REF to be the backport branch (e.g. backport/0.1.9.1), but got '${RELEASE_REF}'."
+            echo "::error::Pass RELEASE_REF from workflow_dispatch in the caller workflow (map release_ref input to RELEASE_REF)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.RELEASE_REF }}
+          persist-credentials: false
+
+      - name: Verify backport checkout
+        if: inputs.BACKPORT
+        env:
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
+        run: |
+          CURRENT_BRANCH="$(git branch --show-current)"
+
+          echo "Checked out branch: ${CURRENT_BRANCH}"
+          if [ "$CURRENT_BRANCH" != "$RELEASE_REF" ]; then
+            echo "::error::Expected backport source branch '${RELEASE_REF}', but checked out '${CURRENT_BRANCH}'."
+            exit 1
+          fi
+
+      - name: Get latest tag
+        id: get_latest_tag
+        env:
+          VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
+          BASE_TAG: ${{ inputs.BASE_TAG }}
+          BACKPORT: ${{ inputs.BACKPORT }}
+          RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
+          TAG_DISCOVERY_SCOPE: ${{ inputs.BACKPORT && inputs.BASE_TAG == '' && 'reachable' || inputs.TAG_DISCOVERY_SCOPE }}
+        run: |
+          if [ -n "$VERSION_PREFIX" ]; then
+            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}$"
+          else
+            PATTERN="^[0-9]+(\.[0-9]+){2,3}$"
+          fi
+
+          normalize_target_tag() {
+            local version="$1"
+
+            if [ -z "$version" ]; then
+              return 1
+            fi
+
+            if echo "$version" | grep -Eq "$PATTERN"; then
+              printf '%s' "$version"
+              return 0
+            fi
+
+            if [ -n "$VERSION_PREFIX" ] && echo "${VERSION_PREFIX}${version}" | grep -Eq "$PATTERN"; then
+              printf '%s' "${VERSION_PREFIX}${version}"
+              return 0
+            fi
+
+            return 1
+          }
+
+          find_previous_reachable_tag() {
+            local target_tag="$1"
+            local candidate=""
+            local tag=""
+
+            while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              [ "$tag" = "$target_tag" ] && continue
+
+              if [ "$(printf '%s\n%s\n' "$tag" "$target_tag" | sort -V | head -n 1)" != "$tag" ]; then
+                continue
+              fi
+
+              if [ -z "$candidate" ] || [ "$(printf '%s\n%s\n' "$candidate" "$tag" | sort -V | tail -n 1)" = "$tag" ]; then
+                candidate="$tag"
+              fi
+            done < <(git tag --merged HEAD -l | { grep -E "$PATTERN" || true; } | sort -V)
+
+            printf '%s' "$candidate"
+          }
+
+          if [ -n "$BASE_TAG" ]; then
+            if echo "$BASE_TAG" | grep -Eq "$PATTERN"; then
+              if ! git rev-parse -q --verify "refs/tags/$BASE_TAG" >/dev/null; then
+                echo "::error::BASE_TAG '$BASE_TAG' does not exist in repository tags"
+                exit 1
+              fi
+              LATEST_TAG="$BASE_TAG"
+            else
+              echo "::error::BASE_TAG '$BASE_TAG' does not match expected version pattern '$PATTERN'"
+              exit 1
+            fi
+          elif [ "$BACKPORT" = "true" ]; then
+            if [ -z "$RELEASE_VERSION" ]; then
+              echo "::error::BACKPORT requires RELEASE_VERSION to be set."
+              exit 1
+            fi
+
+            TARGET_TAG="$(normalize_target_tag "$RELEASE_VERSION" || true)"
+            if [ -z "$TARGET_TAG" ]; then
+              echo "::error::RELEASE_VERSION '$RELEASE_VERSION' does not match expected version pattern '$PATTERN'"
+              exit 1
+            fi
+
+            LATEST_TAG="$(find_previous_reachable_tag "$TARGET_TAG")"
+            if [ -z "$LATEST_TAG" ]; then
+              echo "::warning::No reachable tag found before ${TARGET_TAG} on ${RELEASE_REF:-HEAD}. Using ${VERSION_PREFIX}0.0.0 as baseline."
+              LATEST_TAG="${VERSION_PREFIX}0.0.0"
+            fi
+          else
+            case "$TAG_DISCOVERY_SCOPE" in
+              all)
+                LATEST_TAG=$(git tag -l | { grep -E "$PATTERN" || true; } | sort -V | tail -n 1)
+                ;;
+              reachable)
+                LATEST_TAG=$(git tag --merged HEAD -l | { grep -E "$PATTERN" || true; } | sort -V | tail -n 1)
+                ;;
+              *)
+                echo "::error::TAG_DISCOVERY_SCOPE must be 'reachable' or 'all' (got '$TAG_DISCOVERY_SCOPE')"
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="${VERSION_PREFIX}0.0.0"
+          fi
+          echo "Latest tag: $LATEST_TAG"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Get commit messages
+        id: get_commit_messages
+        env:
+          VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
+          RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          LATEST_TAG="${{ env.LATEST_TAG }}"
+          INITIAL_TAG="${VERSION_PREFIX}0.0.0"
+          > /tmp/raw_commit_hashes.txt
+          > /tmp/commit_hashes.txt
+          > /tmp/commit_subjects.txt
+          HAS_BREAKING_CHANGE=false
+
+          is_breaking_change() {
+            local subject="$1"
+            local full_message="$2"
+
+            if echo "$subject" | grep -qE '!(\(|:)'; then
+              return 0
+            fi
+
+            if echo "$full_message" | grep -iq 'BREAKING CHANGE:'; then
+              return 0
+            fi
+
+            if echo "$subject" | grep -iqE 'BREAK:'; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            schedule_day_of_month=$(echo "$GITHUB_EVENT_SCHEDULE" | awk '{print $3}')
+            schedule_day_of_week=$(echo "$GITHUB_EVENT_SCHEDULE" | awk '{print $5}')
+
+            if [ "$schedule_day_of_month" = "1-7" ] && [ -n "$schedule_day_of_week" ] && [ "$schedule_day_of_week" != "*" ]; then
+              current_day_of_month=$(date -u +%-d)
+              current_day_of_week=$(date -u +%u)
+              normalized_schedule_day_of_week=$(echo "$schedule_day_of_week" | tr '[:lower:]' '[:upper:]')
+
+              case "$normalized_schedule_day_of_week" in
+                0|7|SUN) expected_day_of_week=7 ;;
+                1|MON) expected_day_of_week=1 ;;
+                2|TUE) expected_day_of_week=2 ;;
+                3|WED) expected_day_of_week=3 ;;
+                4|THU) expected_day_of_week=4 ;;
+                5|FRI) expected_day_of_week=5 ;;
+                6|SAT) expected_day_of_week=6 ;;
+                *) expected_day_of_week="" ;;
+              esac
+
+              if [ -n "$expected_day_of_week" ] && { [ "$current_day_of_week" != "$expected_day_of_week" ] || [ "$current_day_of_month" -gt 7 ]; }; then
+                echo "Skipping scheduled release because this run is outside the first scheduled weekday occurrence in the month."
+                echo "SKIP_RELEASE=true" >> $GITHUB_ENV
+                echo "SKIP_RELEASE=true" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+            fi
+          fi
+
+          if [ "$LATEST_TAG" = "$INITIAL_TAG" ]; then
+            git log --format='%H' HEAD > /tmp/raw_commit_hashes.txt
+          else
+            git log --format='%H' "${LATEST_TAG}..HEAD" > /tmp/raw_commit_hashes.txt
+          fi
+
+          while read -r HASH || [ -n "$HASH" ]; do
+            [ -z "$HASH" ] && continue
+
+            full_message=$(git show -s --format='%s%n%b' "$HASH")
+            subject=$(git show -s --format='%s' "$HASH")
+
+            if echo "$full_message" | grep -iq '\[skip ci\]'; then
+              echo "Skipping commit marked with [skip ci]: $subject"
+              continue
+            fi
+
+            if is_breaking_change "$subject" "$full_message"; then
+              HAS_BREAKING_CHANGE=true
+            fi
+
+            echo "$HASH" >> /tmp/commit_hashes.txt
+            echo "$subject" >> /tmp/commit_subjects.txt
+          done < /tmp/raw_commit_hashes.txt
+
+          if [ ! -s /tmp/commit_hashes.txt ]; then
+            if [ -n "$RELEASE_VERSION" ]; then
+              echo "No release-worthy commits found since last tag, but RELEASE_VERSION is set. Continuing manual release."
+            else
+              echo "No release-worthy commits found since last tag. Skipping release."
+              echo "SKIP_RELEASE=true" >> $GITHUB_ENV
+              echo "SKIP_RELEASE=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          COMMITS=$(tr '\n' ' ' < /tmp/commit_subjects.txt)
+          echo "COMMITS=${COMMITS}" >> $GITHUB_ENV
+          echo "HAS_BREAKING_CHANGE=${HAS_BREAKING_CHANGE}" >> $GITHUB_ENV
+          echo "SKIP_RELEASE=false" >> $GITHUB_ENV
+          echo "SKIP_RELEASE=false" >> $GITHUB_OUTPUT
+
+      - name: Determine new version
+        id: new_version
+        if: env.SKIP_RELEASE != 'true'
+        env:
+          VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
+          BASE_TAG: ${{ inputs.BASE_TAG }}
+          BACKPORT: ${{ inputs.BACKPORT }}
+          RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+        run: |
+          LATEST_TAG="${{ env.LATEST_TAG }}"
+
+          if [ -n "$VERSION_PREFIX" ]; then
+            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}$"
+          else
+            PATTERN="^[0-9]+(\.[0-9]+){2,3}$"
+          fi
+
+          if [ -n "$RELEASE_VERSION" ]; then
+            if echo "$RELEASE_VERSION" | grep -Eq "$PATTERN"; then
+              NEW_TAG="$RELEASE_VERSION"
+            elif [ -n "$VERSION_PREFIX" ] && echo "${VERSION_PREFIX}${RELEASE_VERSION}" | grep -Eq "$PATTERN"; then
+              NEW_TAG="${VERSION_PREFIX}${RELEASE_VERSION}"
+            else
+              echo "::error::RELEASE_VERSION '$RELEASE_VERSION' does not match expected version pattern '$PATTERN'"
+              exit 1
+            fi
+
+            echo "Using manual release version: $NEW_TAG"
+          else
+          VERSION_WITHOUT_PREFIX="${LATEST_TAG#$VERSION_PREFIX}"
+          VERSION_PARTS=(${VERSION_WITHOUT_PREFIX//./ })
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+
+          echo "Generating tag for commits: $COMMITS"
+
+          if [ "$BACKPORT" = "true" ] || [ -n "$BASE_TAG" ]; then
+            NEW_PATCH=$((PATCH + 1))
+            NEW_TAG="${VERSION_PREFIX}${MAJOR}.${MINOR}.${NEW_PATCH}"
+          elif [ "$HAS_BREAKING_CHANGE" = "true" ]; then
+            NEW_MAJOR=$((MAJOR + 1))
+            NEW_TAG="${VERSION_PREFIX}${NEW_MAJOR}.0.0"
+          elif echo "$COMMITS" | grep -iE 'feat:|feature:'; then
+            NEW_MINOR=$((MINOR + 1))
+            NEW_TAG="${VERSION_PREFIX}${MAJOR}.${NEW_MINOR}.0"
+          elif echo "$COMMITS" | grep -iE 'fix:|chore:'; then
+            NEW_PATCH=$((PATCH + 1))
+            NEW_TAG="${VERSION_PREFIX}${MAJOR}.${MINOR}.${NEW_PATCH}"
+          else
+            NEW_PATCH=$((PATCH + 1))
+            NEW_TAG="${VERSION_PREFIX}${MAJOR}.${MINOR}.${NEW_PATCH}"
+          fi
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$NEW_TAG" >/dev/null; then
+            if [ -n "$RELEASE_VERSION" ]; then
+              echo "::error::Manual release version '$NEW_TAG' already exists."
+            else
+              echo "::error::Calculated next tag '$NEW_TAG' already exists. Adjust the release baseline (BASE_TAG) or handle this release manually."
+            fi
+            exit 1
+          fi
+
+          echo "New tag: $NEW_TAG"
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Collect changed files in release commits
+        if: env.SKIP_RELEASE != 'true'
+        run: |
+          > /tmp/changed_files.txt
+          while read -r HASH || [ -n "$HASH" ]; do
+            [ -z "$HASH" ] && continue
+            git diff-tree --no-commit-id --name-only -r "$HASH" >> /tmp/changed_files.txt
+          done < /tmp/commit_hashes.txt
+
+          sort -u /tmp/changed_files.txt -o /tmp/changed_files.txt
+
+          echo "Changed files in release commits:"
+          cat /tmp/changed_files.txt
+
+      - name: Detect frontend changes
+        id: detect_fe_changes
+        if: env.SKIP_RELEASE != 'true'
+        env:
+          TAO_FE_FILE_PATTERNS: ${{ inputs.TAO_FE_FILE_PATTERNS }}
+          TAO_BUILD_FE: ${{ inputs.TAO_BUILD_FE }}
+        run: |
+          NEEDS_FE_BUILD=false
+          TAO_BUILD_FE="$(printf '%s' "${TAO_BUILD_FE:-auto}" | tr '[:upper:]' '[:lower:]')"
+
+          case "$TAO_BUILD_FE" in
+            auto|'') TAO_BUILD_FE=auto ;;
+            yes|true) TAO_BUILD_FE=yes ;;
+            no|false) TAO_BUILD_FE=no ;;
+            *)
+              echo "::error::TAO_BUILD_FE must be 'auto', 'yes'/'true', or 'no'/'false' (got '$TAO_BUILD_FE')"
+              exit 1
+              ;;
+          esac
+
+          case "$TAO_BUILD_FE" in
+            auto) ;;
+            yes)
+              NEEDS_FE_BUILD=true
+              echo "Frontend bundle preparation forced by TAO_BUILD_FE=${TAO_BUILD_FE}."
+              echo "NEEDS_FE_BUILD=$NEEDS_FE_BUILD" >> $GITHUB_ENV
+              echo "NEEDS_FE_BUILD=$NEEDS_FE_BUILD" >> $GITHUB_OUTPUT
+              exit 0
+              ;;
+            no)
+              NEEDS_FE_BUILD=false
+              echo "Frontend bundle preparation skipped by TAO_BUILD_FE=${TAO_BUILD_FE}."
+              echo "NEEDS_FE_BUILD=$NEEDS_FE_BUILD" >> $GITHUB_ENV
+              echo "NEEDS_FE_BUILD=$NEEDS_FE_BUILD" >> $GITHUB_OUTPUT
+              exit 0
+              ;;
+          esac
+
+          while read -r FILE || [ -n "$FILE" ]; do
+            [ -z "$FILE" ] && continue
+
+            if echo "$FILE" | grep -qiE "$TAO_FE_FILE_PATTERNS"; then
+              echo "Frontend rebuild required due to changed file: $FILE"
+              NEEDS_FE_BUILD=true
+              break
+            fi
+          done < /tmp/changed_files.txt
+
+          if [ "$NEEDS_FE_BUILD" = "true" ]; then
+            echo "Release includes frontend source changes. Frontend bundle preparation will run."
+          else
+            echo "Release includes no frontend source changes. Skipping frontend bundle preparation."
+          fi
+
+          echo "NEEDS_FE_BUILD=$NEEDS_FE_BUILD" >> $GITHUB_ENV
+          echo "NEEDS_FE_BUILD=$NEEDS_FE_BUILD" >> $GITHUB_OUTPUT
+
+      - name: Detect locale changes
+        id: detect_locale_changes
+        if: env.SKIP_RELEASE != 'true'
+        env:
+          TAO_LOCALE_FILE_PATTERNS: ${{ inputs.TAO_LOCALE_FILE_PATTERNS }}
+          TAO_BUILD_LOCALE: ${{ inputs.TAO_BUILD_LOCALE }}
+          TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
+          TAO_EXTENSION_PATH: ${{ inputs.TAO_EXTENSION_PATH }}
+          TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
+        run: |
+          NEEDS_LOCALE_COMPILE=false
+          TAO_BUILD_LOCALE="$(printf '%s' "${TAO_BUILD_LOCALE:-auto}" | tr '[:upper:]' '[:lower:]')"
+          > /tmp/changed_locales.txt
+
+          discover_extension_locales() {
+            local search_root="$1"
+            local ext_name="$2"
+
+            if [ ! -d "$search_root" ]; then
+              return 0
+            fi
+
+            while IFS= read -r po_file; do
+              [ -z "$po_file" ] && continue
+
+              LOCALE=""
+              if [[ "$po_file" =~ /${ext_name}/locales/([^/]+)/messages\.po$ ]]; then
+                LOCALE="${BASH_REMATCH[1]}"
+              elif [[ "$po_file" =~ /locales/([^/]+)/messages\.po$ ]]; then
+                LOCALE="${BASH_REMATCH[1]}"
+              fi
+
+              [ -z "$LOCALE" ] && continue
+              echo "$LOCALE" >> /tmp/changed_locales.txt
+            done < <(find "$search_root" -type f -path "*/locales/*/messages.po" 2>/dev/null || true)
+          }
+
+          case "$TAO_BUILD_LOCALE" in
+            auto|'') TAO_BUILD_LOCALE=auto ;;
+            yes|true) TAO_BUILD_LOCALE=yes ;;
+            no|false) TAO_BUILD_LOCALE=no ;;
+            *)
+              echo "::error::TAO_BUILD_LOCALE must be 'auto', 'yes'/'true', or 'no'/'false' (got '$TAO_BUILD_LOCALE')"
+              exit 1
+              ;;
+          esac
+
+          case "$TAO_BUILD_LOCALE" in
+            auto) ;;
+            yes)
+              NEEDS_LOCALE_COMPILE=true
+              echo "Locale compilation forced by TAO_BUILD_LOCALE=${TAO_BUILD_LOCALE}."
+              ;;
+            no)
+              NEEDS_LOCALE_COMPILE=false
+              echo "Locale compilation skipped by TAO_BUILD_LOCALE=${TAO_BUILD_LOCALE}."
+              echo "NEEDS_LOCALE_COMPILE=$NEEDS_LOCALE_COMPILE" >> $GITHUB_ENV
+              echo "NEEDS_LOCALE_COMPILE=$NEEDS_LOCALE_COMPILE" >> $GITHUB_OUTPUT
+              echo "CHANGED_LOCALES=" >> $GITHUB_OUTPUT
+              exit 0
+              ;;
+          esac
+
+          while read -r FILE || [ -n "$FILE" ]; do
+            [ -z "$FILE" ] && continue
+
+            if ! echo "$FILE" | grep -qiE "$TAO_LOCALE_FILE_PATTERNS"; then
+              continue
+            fi
+
+            LOCALE=""
+            if [[ "$FILE" =~ locales/([^/]+)/ ]]; then
+              LOCALE="${BASH_REMATCH[1]}"
+            fi
+
+            if [ -z "$LOCALE" ]; then
+              echo "::warning::Changed locale source file does not include a locales/<locale>/ path segment: $FILE"
+              continue
+            fi
+
+            echo "Locale compilation required due to changed file: $FILE (locale: $LOCALE)"
+            echo "$LOCALE" >> /tmp/changed_locales.txt
+          done < /tmp/changed_files.txt
+
+          if [ "$TAO_BUILD_LOCALE" = "yes" ] && [ ! -s /tmp/changed_locales.txt ]; then
+            REPO_ROOT="$GITHUB_WORKSPACE"
+            TAO_ROOT_DIR="$REPO_ROOT"
+            case "$TAO_ROOT_PATH" in
+              ""|".") ;;
+              /*) TAO_ROOT_DIR="$TAO_ROOT_PATH" ;;
+              *) TAO_ROOT_DIR="$REPO_ROOT/${TAO_ROOT_PATH#./}" ;;
+            esac
+
+            if [ -n "$TAO_EXTENSION_PATH" ]; then
+              case "$TAO_EXTENSION_PATH" in
+                ""|".") EXTENSION_DIR="$REPO_ROOT" ;;
+                /*) EXTENSION_DIR="$TAO_EXTENSION_PATH" ;;
+                *) EXTENSION_DIR="$REPO_ROOT/${TAO_EXTENSION_PATH#./}" ;;
+              esac
+            elif [ -d "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME" ]; then
+              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
+            elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
+              EXTENSION_DIR="$TAO_ROOT_DIR"
+            elif [ -f "$REPO_ROOT/manifest.php" ]; then
+              EXTENSION_DIR="$REPO_ROOT"
+            else
+              EXTENSION_DIR="$REPO_ROOT"
+            fi
+
+            echo "Discovering extension locales under $EXTENSION_DIR"
+            discover_extension_locales "$EXTENSION_DIR" "$TAO_EXTENSION_NAME"
+          fi
+
+          if [ -s /tmp/changed_locales.txt ]; then
+            sort -u /tmp/changed_locales.txt -o /tmp/changed_locales.txt
+            NEEDS_LOCALE_COMPILE=true
+          elif [ "$TAO_BUILD_LOCALE" = "yes" ]; then
+            echo "::error::TAO_BUILD_LOCALE=yes but no extension locales were found."
+            exit 1
+          else
+            NEEDS_LOCALE_COMPILE=false
+          fi
+
+          CHANGED_LOCALES=""
+          if [ -s /tmp/changed_locales.txt ]; then
+            CHANGED_LOCALES=$(paste -sd, /tmp/changed_locales.txt)
+          fi
+
+          if [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
+            if [ "$TAO_BUILD_LOCALE" = "yes" ]; then
+              echo "Locale compilation forced by TAO_BUILD_LOCALE=yes for: ${CHANGED_LOCALES:-unknown locales}"
+            else
+              echo "Release includes locale source changes. Locale compilation will run for: ${CHANGED_LOCALES:-unknown locales}"
+            fi
+          else
+            echo "Release includes no locale source changes. Skipping locale compilation."
+          fi
+
+          echo "NEEDS_LOCALE_COMPILE=$NEEDS_LOCALE_COMPILE" >> $GITHUB_ENV
+          echo "NEEDS_LOCALE_COMPILE=$NEEDS_LOCALE_COMPILE" >> $GITHUB_OUTPUT
+          echo "CHANGED_LOCALES=$CHANGED_LOCALES" >> $GITHUB_OUTPUT
+
+      - name: Upload release plan artifact
+        if: steps.get_commit_messages.outputs.SKIP_RELEASE != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-plan
+          path: |
+            /tmp/commit_hashes.txt
+            /tmp/changed_locales.txt
+          retention-days: 1
+
+  publish:
+    name: Release ${{ needs.plan.outputs.new_tag }}
+    runs-on: ubuntu-latest
+    needs: plan
+    if: ${{ inputs.ENABLED && needs.plan.result == 'success' && needs.plan.outputs.skip_release != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      LATEST_TAG: ${{ needs.plan.outputs.latest_tag }}
+      NEW_TAG: ${{ needs.plan.outputs.new_tag }}
+      NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
+      NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
+      CHANGED_LOCALES: ${{ needs.plan.outputs.changed_locales }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.RELEASE_REF }}
+          persist-credentials: false
+
+      - name: Download release plan artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: /tmp
+
+      - name: Setup PHP and Composer
+        if: needs.plan.outputs.needs_fe_build == 'true' || needs.plan.outputs.needs_locale_compile == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.PHP_VERSION }}
+          tools: composer:v2
+          coverage: none
+
+      - name: Setup Node.js for frontend bundles
+        if: needs.plan.outputs.needs_fe_build == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install PHP dependencies
+        if: needs.plan.outputs.needs_fe_build == 'true' || needs.plan.outputs.needs_locale_compile == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
+          TAO_COMPOSER_INSTALL_COMMAND: ${{ inputs.TAO_COMPOSER_INSTALL_COMMAND }}
+          TAO_COMPOSER_ALLOW_PLUGINS: ${{ inputs.TAO_COMPOSER_ALLOW_PLUGINS }}
+          NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
+          NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
+        run: |
+          set -euo pipefail
+
+          REPO_ROOT="$GITHUB_WORKSPACE"
+          TAO_ROOT_DIR="$REPO_ROOT"
+          case "$TAO_ROOT_PATH" in
+            ""|".") ;;
+            /*) TAO_ROOT_DIR="$TAO_ROOT_PATH" ;;
+            *) TAO_ROOT_DIR="$REPO_ROOT/${TAO_ROOT_PATH#./}" ;;
+          esac
+
+          if [ ! -d "$TAO_ROOT_DIR" ]; then
+            echo "::error::Resolved TAO_ROOT_PATH does not exist: $TAO_ROOT_DIR"
+            exit 1
+          fi
+
+          export COMPOSER_AUTH='{"github-oauth":{"github.com":"'"$GH_TOKEN"'"}}'
+
+          allow_composer_plugins() {
+            local plugins_csv="$1"
+            [ -z "$plugins_csv" ] && return 0
+
+            IFS=',' read -r -a plugins <<< "$plugins_csv"
+            for plugin in "${plugins[@]}"; do
+              plugin="$(printf '%s' "$plugin" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+              [ -z "$plugin" ] && continue
+              echo "Allowing Composer plugin: $plugin"
+              composer config --no-plugins "allow-plugins.$plugin" true
+            done
+          }
+
+          prepare_tao_locale_workspace() {
+            local root="$1"
+            local messages_json='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations":{}}'
+
+            echo "Preparing TAO workspace for locale compilation ..."
+            cd "$root"
+            mkdir -p tao/views/locales/en-US/
+            mkdir -p config/
+            touch index.php
+            echo "$messages_json" > tao/views/locales/en-US/messages.json
+          }
+
+          prepare_tao_frontend_workspace() {
+            local root="$1"
+            local messages_json='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations":{}}'
+
+            echo "Preparing TAO workspace for frontend build ..."
+            cd "$root"
+            mkdir -p taoQtiItem/views/js/mathjax/
+            mkdir -p tao/views/locales/en-US/
+            mkdir -p config/
+            touch taoQtiItem/views/js/mathjax/MathJax.js
+            touch index.php
+            echo "$messages_json" > tao/views/locales/en-US/messages.json
+          }
+
+          prepare_tao_workspace() {
+            if [ "$NEEDS_FE_BUILD" = "true" ]; then
+              prepare_tao_frontend_workspace "$TAO_ROOT_DIR"
+            elif [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
+              prepare_tao_locale_workspace "$TAO_ROOT_DIR"
+            fi
+          }
+
+          if [ -n "$TAO_COMPOSER_INSTALL_COMMAND" ]; then
+            echo "Running TAO composer install command in $TAO_ROOT_DIR"
+            cd "$TAO_ROOT_DIR"
+            allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
+            eval "$TAO_COMPOSER_INSTALL_COMMAND"
+            git checkout -- composer.json 2>/dev/null || true
+            prepare_tao_workspace
+            exit 0
+          fi
+
+          if [ ! -f "$TAO_ROOT_DIR/composer.json" ]; then
+            echo "No composer.json found under $TAO_ROOT_DIR, skipping composer install."
+            exit 0
+          fi
+
+          if [ ! -d "$TAO_ROOT_DIR/tao" ] && [ ! -d "$TAO_ROOT_DIR/vendor" ]; then
+            echo "Installing PHP dependencies in $TAO_ROOT_DIR"
+            cd "$TAO_ROOT_DIR"
+            allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
+            composer install --no-interaction --prefer-dist --no-progress
+            git checkout -- composer.json 2>/dev/null || true
+          else
+            echo "PHP dependencies already installed, preparing TAO workspace only."
+          fi
+
+          prepare_tao_workspace
+
+      - name: Resolve TAO extension context
+        if: needs.plan.outputs.needs_fe_build == 'true' || needs.plan.outputs.needs_locale_compile == 'true'
+        env:
+          TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
+          TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
+          TAO_EXTENSION_PATH: ${{ inputs.TAO_EXTENSION_PATH }}
+        run: |
+          set -euo pipefail
+
+          REPO_ROOT="$GITHUB_WORKSPACE"
+          TAO_ROOT_DIR="$REPO_ROOT"
+          case "$TAO_ROOT_PATH" in
+            ""|".") ;;
+            /*) TAO_ROOT_DIR="$TAO_ROOT_PATH" ;;
+            *) TAO_ROOT_DIR="$REPO_ROOT/${TAO_ROOT_PATH#./}" ;;
+          esac
+
+          if [ ! -d "$TAO_ROOT_DIR" ]; then
+            echo "::error::Resolved TAO_ROOT_PATH does not exist: $TAO_ROOT_DIR"
+            exit 1
+          fi
+
+          resolve_path() {
+            local base="$1"
+            local path="$2"
+            case "$path" in
+              ""|".") printf '%s' "$base" ;;
+              /*) printf '%s' "$path" ;;
+              *) printf '%s' "$base/${path#./}" ;;
+            esac
+          }
+
+          EXPECTED_EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
+          EXTENSION_DIR=""
+
+          if [ -n "$TAO_EXTENSION_PATH" ]; then
+            EXTENSION_DIR="$(resolve_path "$REPO_ROOT" "$TAO_EXTENSION_PATH")"
+          elif [ -f "$EXPECTED_EXTENSION_DIR/manifest.php" ]; then
+            EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
+          elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
+            EXTENSION_DIR="$TAO_ROOT_DIR"
+          elif [ -f "$REPO_ROOT/manifest.php" ]; then
+            EXTENSION_DIR="$REPO_ROOT"
+          elif [ -d "$EXPECTED_EXTENSION_DIR" ]; then
+            EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
+          else
+            EXTENSION_DIR="$REPO_ROOT"
+          fi
+
+          if [ ! -f "$EXTENSION_DIR/manifest.php" ]; then
+            echo "::warning::No manifest.php found for extension '$TAO_EXTENSION_NAME' under $EXTENSION_DIR."
+          fi
+
+          if [ ! -f "$EXPECTED_EXTENSION_DIR/manifest.php" ] && [ -f "$EXTENSION_DIR/manifest.php" ]; then
+            if [ -e "$EXPECTED_EXTENSION_DIR" ] && [ ! -L "$EXPECTED_EXTENSION_DIR" ]; then
+              echo "::error::$EXPECTED_EXTENSION_DIR exists but is not the extension root (missing manifest.php)."
+              exit 1
+            fi
+
+            EXTENSION_LINK_TARGET="$(realpath --relative-to="$TAO_ROOT_DIR" "$EXTENSION_DIR")"
+            echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
+            ln -sfn "$EXTENSION_LINK_TARGET" "$EXPECTED_EXTENSION_DIR"
+          fi
+
+          PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
+
+          echo "TAO root path: $TAO_ROOT_DIR"
+          echo "TAO extension path: $EXTENSION_DIR"
+          echo "TAO physical extension path: $PHYSICAL_EXTENSION_DIR"
+
+          {
+            echo "TAO_ROOT_DIR=$TAO_ROOT_DIR"
+            echo "EXTENSION_DIR=$EXTENSION_DIR"
+            echo "PHYSICAL_EXTENSION_DIR=$PHYSICAL_EXTENSION_DIR"
+            echo "EXPECTED_EXTENSION_DIR=$EXPECTED_EXTENSION_DIR"
+          } >> "$GITHUB_ENV"
+
+      - name: Build frontend bundles
+        if: needs.plan.outputs.needs_fe_build == 'true'
+        env:
+          TAO_BUILD_WORKDIR: ${{ inputs.TAO_BUILD_WORKDIR }}
+          TAO_BUILD_SETUP_COMMAND: ${{ inputs.TAO_BUILD_SETUP_COMMAND }}
+          TAO_JS_BUNDLE_COMMAND: ${{ inputs.TAO_JS_BUNDLE_COMMAND }}
+          TAO_CSS_BUNDLE_COMMAND: ${{ inputs.TAO_CSS_BUNDLE_COMMAND }}
+          TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
+        run: |
+          set -euo pipefail
+
+          REPO_ROOT="$GITHUB_WORKSPACE"
+
+          prepare_extension_frontend_layout() {
+            local root="$1"
+
+            echo "Preparing extension frontend output directories in $root"
+            mkdir -p "$root/views/js" "$root/views/css" "$root/loader"
+
+            if [ -d "$root/views/js/loader" ] && [ ! -L "$root/views/js/loader" ]; then
+              echo "Using existing directory: $root/views/js/loader"
+              return 0
+            fi
+
+            rm -f "$root/views/js/loader"
+            ln -sfn ../../loader "$root/views/js/loader"
+            echo "Linked $root/views/js/loader -> loader for bundle/transform compatibility"
+          }
+
+          prepare_extension_frontend_layout "$PHYSICAL_EXTENSION_DIR"
+
+          EXTENSION_NAME_LOWER=$(printf '%s' "$TAO_EXTENSION_NAME" | tr '[:upper:]' '[:lower:]')
+          BUNDLE_TASK_FILE="$EXTENSION_DIR/views/build/grunt/bundle.js"
+          SASS_TASK_FILE="$EXTENSION_DIR/views/build/grunt/sass.js"
+          BUILD_WORKDIR=""
+          JS_COMMAND="$TAO_JS_BUNDLE_COMMAND"
+          CSS_COMMAND="$TAO_CSS_BUNDLE_COMMAND"
+
+          if [ -z "$JS_COMMAND" ] && [ -f "$BUNDLE_TASK_FILE" ]; then
+            JS_COMMAND="npx grunt ${EXTENSION_NAME_LOWER}bundle"
+          fi
+
+          if [ -z "$CSS_COMMAND" ] && [ -f "$SASS_TASK_FILE" ]; then
+            CSS_COMMAND="npx grunt ${EXTENSION_NAME_LOWER}sass"
+          fi
+
+          if [ -n "$TAO_BUILD_SETUP_COMMAND" ] || [ -n "$JS_COMMAND" ] || [ -n "$CSS_COMMAND" ]; then
+            BUILD_WORKDIR="$TAO_BUILD_WORKDIR"
+            if [ -z "$BUILD_WORKDIR" ]; then
+              BUILD_WORKDIR="tao/views/build"
+            fi
+            case "$BUILD_WORKDIR" in
+              /*) ;;
+              *) BUILD_WORKDIR="$TAO_ROOT_DIR/${BUILD_WORKDIR#./}" ;;
+            esac
+
+            if [ ! -d "$BUILD_WORKDIR" ] && [ -d "$TAO_ROOT_DIR/tao/views/build" ]; then
+              BUILD_WORKDIR="$TAO_ROOT_DIR/tao/views/build"
+            fi
+
+            if [ ! -d "$BUILD_WORKDIR" ]; then
+              echo "::error::Resolved TAO build workdir does not exist: $BUILD_WORKDIR. Ensure composer install completed successfully and TAO core is available."
+              exit 1
+            fi
+
+            if [ ! -f "$BUILD_WORKDIR/package.json" ] && [ -f "$TAO_ROOT_DIR/tao/views/build/package.json" ]; then
+              BUILD_WORKDIR="$TAO_ROOT_DIR/tao/views/build"
+            fi
+
+            if [ ! -f "$BUILD_WORKDIR/package.json" ]; then
+              echo "::error::No package.json found in TAO build workdir ($BUILD_WORKDIR). Set TAO_BUILD_WORKDIR to the directory that contains TAO core frontend dependencies (usually tao/views/build)."
+              exit 1
+            fi
+          fi
+
+          if [ -n "$BUILD_WORKDIR" ]; then
+            echo "TAO build workdir: $BUILD_WORKDIR"
+          fi
+
+          if [ -n "$BUILD_WORKDIR" ] && [ -z "$TAO_BUILD_SETUP_COMMAND" ]; then
+            echo "Installing frontend build dependencies in $BUILD_WORKDIR"
+            (
+              cd "$BUILD_WORKDIR"
+              if [ -f package-lock.json ]; then
+                npm ci
+              else
+                npm install
+              fi
+            )
+          fi
+
+          if [ -n "$TAO_BUILD_SETUP_COMMAND" ]; then
+            echo "Running TAO build setup command"
+            (
+              cd "$BUILD_WORKDIR"
+              eval "$TAO_BUILD_SETUP_COMMAND"
+            )
+          fi
+
+          if [ -n "$JS_COMMAND" ]; then
+            echo "Running TAO JS bundle command: $JS_COMMAND"
+            cd "$BUILD_WORKDIR"
+            eval "$JS_COMMAND"
+          else
+            echo "Skipping TAO JS bundle step: no explicit command provided and $BUNDLE_TASK_FILE was not found."
+          fi
+
+          if [ -n "$CSS_COMMAND" ]; then
+            echo "Running TAO CSS/SASS command: $CSS_COMMAND"
+            cd "$BUILD_WORKDIR"
+            eval "$CSS_COMMAND"
+          else
+            echo "Skipping TAO CSS/SASS step: no explicit command provided and $SASS_TASK_FILE was not found."
+          fi
+
+      - name: Compile translation JS bundles
+        if: needs.plan.outputs.needs_locale_compile == 'true'
+        env:
+          TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
+          TAO_LOCALE_COMPILE_COMMAND: ${{ inputs.TAO_LOCALE_COMPILE_COMMAND }}
+          CHANGED_LOCALES: ${{ needs.plan.outputs.changed_locales }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$TAO_LOCALE_COMPILE_COMMAND" ]; then
+            echo "Running custom TAO locale compile command: $TAO_LOCALE_COMPILE_COMMAND"
+            cd "$TAO_ROOT_DIR"
+            TAO_TRANSLATE_STANDALONE=1 eval "$TAO_LOCALE_COMPILE_COMMAND"
+            exit 0
+          fi
+
+          LOCALES_FILE="/tmp/changed_locales.txt"
+          if [ ! -s "$LOCALES_FILE" ] && [ -n "$CHANGED_LOCALES" ]; then
+            echo "$CHANGED_LOCALES" | tr ',' '\n' > "$LOCALES_FILE"
+          fi
+
+          if [ ! -s "$LOCALES_FILE" ]; then
+            echo "::error::Locale compilation was requested, but no changed locales were detected."
+            exit 1
+          fi
+
+          echo "Compiling changed locales for extension ${TAO_EXTENSION_NAME}:"
+          cat "$LOCALES_FILE"
+
+          cd "$TAO_ROOT_DIR"
+          while read -r LOCALE || [ -n "$LOCALE" ]; do
+            [ -z "$LOCALE" ] && continue
+
+            EXPECTED_PO="${TAO_ROOT_DIR}/${TAO_EXTENSION_NAME}/locales/${LOCALE}/messages.po"
+            if [ ! -f "$EXPECTED_PO" ]; then
+              echo "::error::Expected PO file for locale '${LOCALE}' was not found at ${EXPECTED_PO}. Ensure the extension symlink under ${TAO_EXTENSION_NAME}/ points to the extension root."
+              exit 1
+            fi
+
+            echo "Running TAO locale compile command for locale ${LOCALE}"
+            TAO_TRANSLATE_STANDALONE=1 php tao/scripts/taoTranslate.php -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
+          done < "$LOCALES_FILE"
+
+      - name: Commit generated release assets
+        if: needs.plan.outputs.needs_fe_build == 'true' || needs.plan.outputs.needs_locale_compile == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          TMP_BRANCH: tmp-release-assets-${{ github.run_id }}-${{ github.run_attempt }}
+          NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
+          NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
+          TAO_COMMIT_GENERATED_FILES: ${{ inputs.TAO_COMMIT_GENERATED_FILES }}
+          TAO_GENERATED_FILES_COMMIT_MESSAGE: ${{ inputs.TAO_GENERATED_FILES_COMMIT_MESSAGE }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+          BACKPORT: ${{ inputs.BACKPORT }}
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          CURRENT_BRANCH=$(git branch --show-current)
+          if [ -z "$CURRENT_BRANCH" ]; then
+            echo "::error::TAO extension workflow requires RELEASE_REF to resolve to a branch so generated release assets can be committed before tagging."
+            exit 1
+          fi
+
+          REPO_ROOT="$GITHUB_WORKSPACE"
+
+          stage_generated_release_assets() {
+            local root="$1"
+            local staged=false
+
+            cd "$REPO_ROOT"
+
+            if [ "$NEEDS_FE_BUILD" = "true" ]; then
+              for asset_path in views loader; do
+                if [ ! -d "$root/$asset_path" ]; then
+                  continue
+                fi
+
+                local repo_relative
+                repo_relative="$(realpath --relative-to="$REPO_ROOT" "$root/$asset_path")"
+
+                echo "Staging generated frontend assets under $repo_relative"
+                git add -A -- "$repo_relative"
+                staged=true
+              done
+            fi
+
+            if [ "$NEEDS_LOCALE_COMPILE" = "true" ] && [ -d "$root/locales" ]; then
+              local repo_relative
+              repo_relative="$(realpath --relative-to="$REPO_ROOT" "$root/locales")"
+
+              echo "Staging generated locale assets under $repo_relative"
+              git add -A -- "$repo_relative"
+              staged=true
+            fi
+
+            if [ "$staged" = "false" ]; then
+              echo "::warning::No extension release asset directories found to stage."
+            fi
+          }
+
+          ASSET_CHECK_PATHS=()
+          if [ "$NEEDS_FE_BUILD" = "true" ] && [ -d "$PHYSICAL_EXTENSION_DIR/views" ]; then
+            ASSET_CHECK_PATHS+=("$(realpath --relative-to="$REPO_ROOT" "$PHYSICAL_EXTENSION_DIR/views")")
+          fi
+          if [ "$NEEDS_FE_BUILD" = "true" ] && [ -d "$PHYSICAL_EXTENSION_DIR/loader" ]; then
+            ASSET_CHECK_PATHS+=("$(realpath --relative-to="$REPO_ROOT" "$PHYSICAL_EXTENSION_DIR/loader")")
+          fi
+          if [ "$NEEDS_LOCALE_COMPILE" = "true" ] && [ -d "$PHYSICAL_EXTENSION_DIR/locales" ]; then
+            ASSET_CHECK_PATHS+=("$(realpath --relative-to="$REPO_ROOT" "$PHYSICAL_EXTENSION_DIR/locales")")
+          fi
+
+          cd "$REPO_ROOT"
+          if [ "${#ASSET_CHECK_PATHS[@]}" -eq 0 ]; then
+            if [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
+              echo "::error::Locale compilation was requested, but no locales directory was found under the extension path: $PHYSICAL_EXTENSION_DIR"
+              exit 1
+            fi
+            echo "No release asset directories available for change detection."
+            exit 0
+          fi
+
+          UNTRACKED_ASSETS=""
+          UNTRACKED_ASSETS="$(git ls-files --others --exclude-standard -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null || true)"
+          if git diff --quiet --ignore-submodules -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null \
+            && [ -z "$UNTRACKED_ASSETS" ]; then
+            if [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
+              echo "::warning::Locale compilation completed, but no generated locale asset changes were detected under ${ASSET_CHECK_PATHS[*]}. Continuing release."
+            else
+              echo "No generated release asset changes detected after TAO release preparation."
+            fi
+            exit 0
+          fi
+
+          echo "Generated release asset changes detected:"
+          git status --short -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null || git status --short
+
+          if [ "${TAO_COMMIT_GENERATED_FILES}" != "true" ]; then
+            echo "::error::Generated release asset changes were detected, but TAO_COMMIT_GENERATED_FILES is false. Refusing to tag an uncommitted release state."
+            exit 1
+          fi
+
+          COMMIT_MESSAGE="$TAO_GENERATED_FILES_COMMIT_MESSAGE"
+          if [ -z "$COMMIT_MESSAGE" ]; then
+            COMMIT_MESSAGE="chore: prepare release assets [skip ci]"
+          fi
+
+          if ! echo "$COMMIT_MESSAGE" | grep -qi '\[skip ci\]'; then
+            COMMIT_MESSAGE="$COMMIT_MESSAGE [skip ci]"
+          fi
+
+          stage_generated_release_assets "$PHYSICAL_EXTENSION_DIR"
+
+          cd "$REPO_ROOT"
+          if git diff --cached --quiet --exit-code; then
+            echo "No generated release asset changes remained after staging."
+            exit 0
+          fi
+
+          git commit -m "$COMMIT_MESSAGE"
+
+          if [ "$BACKPORT" = "true" ]; then
+            echo "Pushing generated assets to backport branch ${RELEASE_REF}."
+            git push origin "HEAD:${RELEASE_REF}"
+            exit 0
+          fi
+
+          if [ "${{ inputs.SINGLE_RELEASE_PR }}" = "true" ]; then
+            RELEASE_BRANCH="release/${NEW_TAG}"
+            echo "Publishing release branch ${RELEASE_BRANCH} with generated assets."
+            git push origin --delete "${RELEASE_BRANCH}" 2>/dev/null || true
+            git push origin "HEAD:${RELEASE_BRANCH}"
+            printf '%s' "${RELEASE_BRANCH}" > /tmp/release_branch.txt
+            exit 0
+          fi
+
+          echo "Deleting branch ${TMP_BRANCH}..."
+          git push origin --delete "${TMP_BRANCH}" 2>/dev/null || true
+
+          echo "Pushing release assets to ${TMP_BRANCH}..."
+          git push origin "HEAD:${TMP_BRANCH}"
+
+          echo "Creating PR to merge release assets into ${CURRENT_BRANCH}..."
+          gh pr create \
+            --title "$COMMIT_MESSAGE" \
+            --body "Auto-generated PR for TAO extension release assets." \
+            --base "$CURRENT_BRANCH" \
+            --head "$TMP_BRANCH"
+
+          PR_NUMBER=$(gh pr list --head "$TMP_BRANCH" --base "$CURRENT_BRANCH" --json number --jq '.[0].number')
+          gh pr merge "$PR_NUMBER" --merge --admin
+
+          echo "Syncing local ${CURRENT_BRANCH} after merge..."
+          git fetch origin "$CURRENT_BRANCH"
+          git checkout "$CURRENT_BRANCH"
+          git reset --hard "origin/${CURRENT_BRANCH}"
+
+          echo "Deleting branch ${TMP_BRANCH}..."
+          git push origin --delete "${TMP_BRANCH}" 2>/dev/null || true
+
+      - name: Prepare release notes
+        if: needs.plan.outputs.skip_release != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          echo "**Release notes**" > /tmp/release_notes.md
+          echo "" >> /tmp/release_notes.md
+          if git rev-parse -q --verify "refs/tags/${LATEST_TAG}" >/dev/null; then
+            echo "Full change list [here](https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${NEW_TAG})" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+          fi
+          > /tmp/seen_prs.txt
+
+          while read -r HASH || [ -n "$HASH" ]; do
+            [ -z "$HASH" ] && continue
+
+            PR_JSON=$(gh api /repos/${{ github.repository }}/commits/$HASH/pulls --jq '.[0] | {number, title, author: .user.login}' 2>/dev/null || echo "{}")
+            PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number // empty')
+
+            if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+              PR_TITLE=$(echo "$PR_JSON" | jq -r '.title // empty')
+
+              if echo "$PR_TITLE" | grep -qi '\[skip ci\]'; then
+                continue
+              fi
+
+              if ! grep -q "^${PR_NUMBER}$" /tmp/seen_prs.txt 2>/dev/null; then
+                echo "$PR_NUMBER" >> /tmp/seen_prs.txt
+                PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author // empty')
+                echo "- ${PR_TITLE} [#${PR_NUMBER}](https://github.com/${{ github.repository }}/pull/${PR_NUMBER}) by [@${PR_AUTHOR}](https://github.com/${PR_AUTHOR})" >> /tmp/release_notes.md
+              fi
+            else
+              COMMIT_SUBJECT=$(git show -s --format='%s' "$HASH")
+              SHORT_HASH=$(git rev-parse --short "$HASH")
+              echo "- ${COMMIT_SUBJECT} ([${SHORT_HASH}](https://github.com/${{ github.repository }}/commit/${HASH}))" >> /tmp/release_notes.md
+            fi
+          done < /tmp/commit_hashes.txt
+
+          cat /tmp/release_notes.md
+
+      - name: Create new tag and release notes
+        if: ${{ !inputs.SINGLE_RELEASE_PR && !inputs.BACKPORT }}
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          git tag -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
+          git push origin "${NEW_TAG}"
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.SINGLE_RELEASE_PR && !inputs.BACKPORT }}
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+        run: |
+          gh release create "${NEW_TAG}" --title "${NEW_TAG}" --notes-file /tmp/release_notes.md
+
+      - name: Finalize backport release
+        if: inputs.BACKPORT
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch origin "$RELEASE_REF"
+          git checkout "$RELEASE_REF"
+          git pull origin "$RELEASE_REF"
+
+          RELEASE_COMMIT="$(git rev-parse HEAD)"
+          git fetch origin "refs/tags/${NEW_TAG}:refs/tags/${NEW_TAG}" 2>/dev/null || true
+
+          if git rev-parse -q --verify "refs/tags/${NEW_TAG}" >/dev/null; then
+            EXISTING_TAG_COMMIT="$(git rev-parse "refs/tags/${NEW_TAG}^{commit}")"
+            if [ "$EXISTING_TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+              echo "::error::Tag ${NEW_TAG} already exists on ${EXISTING_TAG_COMMIT}, but this release targets ${RELEASE_COMMIT}."
+              exit 1
+            fi
+            echo "Tag ${NEW_TAG} already exists on the intended commit. Skipping tag creation."
+          else
+            git tag -a "${NEW_TAG}" -m "Backport release ${NEW_TAG}"
+            git push origin "${NEW_TAG}"
+          fi
+
+          if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
+            echo "GitHub release ${NEW_TAG} already exists. Skipping release creation."
+          else
+            gh release create "${NEW_TAG}" --title "${NEW_TAG}" --notes-file /tmp/release_notes.md --latest=false
+          fi
+
+      - name: Upload release publish artifact
+        if: ${{ inputs.SINGLE_RELEASE_PR && !inputs.BACKPORT && needs.plan.outputs.skip_release != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-publish
+          path: |
+            /tmp/release_notes.md
+            /tmp/release_branch.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+  merge-back:
+    needs:
+      - plan
+      - publish
+    runs-on: ubuntu-latest
+    if: ${{ needs.plan.outputs.skip_release != 'true' && needs.publish.result == 'success' && !inputs.BACKPORT && (inputs.SINGLE_RELEASE_PR || !inputs.SKIP_MERGE_BACK) }}
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download release publish artifact
+        if: inputs.SINGLE_RELEASE_PR
+        uses: actions/download-artifact@v8
+        with:
+          name: release-publish
+          path: /tmp
+
+      - name: Publish single release pull request
+        if: inputs.SINGLE_RELEASE_PR
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          NEW_TAG: ${{ needs.plan.outputs.new_tag }}
+          RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+          DEV_BRANCH: ${{ inputs.BACKPORT && inputs.RELEASE_REF || inputs.DEV_BRANCH }}
+          MAIN_BRANCH: ${{ inputs.MAIN_BRANCH }}
+          SKIP_MERGE_BACK: ${{ inputs.SKIP_MERGE_BACK || inputs.BACKPORT }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch origin
+
+          finalize_release_on_branch() {
+            local branch="$1"
+
+            git fetch origin "$branch"
+            git checkout "$branch"
+            git pull origin "$branch"
+
+            if git rev-parse -q --verify "refs/tags/${NEW_TAG}" >/dev/null; then
+              echo "Tag ${NEW_TAG} already exists. Skipping tag creation."
+            else
+              git tag -a "${NEW_TAG}" -m "Release ${NEW_TAG}"
+              git push origin "${NEW_TAG}"
+            fi
+
+            if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
+              echo "GitHub release ${NEW_TAG} already exists. Skipping release creation."
+            else
+              gh release create "${NEW_TAG}" --title "${NEW_TAG}" --notes-file /tmp/release_notes.md
+            fi
+          }
+
+          sync_dev_from_main() {
+            if [ "$DEV_BRANCH" = "$MAIN_BRANCH" ]; then
+              return 0
+            fi
+
+            echo "Syncing ${DEV_BRANCH} from ${MAIN_BRANCH}."
+            git fetch origin "$DEV_BRANCH" "$MAIN_BRANCH"
+            git checkout "$DEV_BRANCH"
+            git pull origin "$DEV_BRANCH"
+            git merge "origin/${MAIN_BRANCH}" -m "Sync ${MAIN_BRANCH} after release ${NEW_TAG} [skip ci]"
+
+            if git push origin "$DEV_BRANCH"; then
+              echo "Synced ${DEV_BRANCH} from ${MAIN_BRANCH}."
+            else
+              echo "::warning::Direct push to ${DEV_BRANCH} blocked. Syncing via pull request."
+              SYNC_BRANCH="tmp-sync-dev-after-${NEW_TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              git push origin --delete "$SYNC_BRANCH" 2>/dev/null || true
+              git push origin "HEAD:refs/heads/${SYNC_BRANCH}"
+              gh pr create \
+                --title "Sync ${MAIN_BRANCH} after release ${NEW_TAG} [skip ci]" \
+                --body "Auto-generated PR to sync \`${DEV_BRANCH}\` after release \`${NEW_TAG}\`." \
+                --base "$DEV_BRANCH" \
+                --head "$SYNC_BRANCH"
+              PR_NUMBER=$(gh pr list --head "$SYNC_BRANCH" --base "$DEV_BRANCH" --json number --jq '.[0].number')
+              gh pr merge "$PR_NUMBER" --merge --admin
+              git push origin --delete "$SYNC_BRANCH" 2>/dev/null || true
+            fi
+          }
+
+          RELEASE_BRANCH="release/${NEW_TAG}"
+          if [ -f /tmp/release_branch.txt ] && [ -s /tmp/release_branch.txt ]; then
+            RELEASE_BRANCH="$(tr -d '[:space:]' < /tmp/release_branch.txt)"
+          else
+            echo "No generated asset branch found. Creating ${RELEASE_BRANCH} from origin/${DEV_BRANCH}."
+            git push origin --delete "${RELEASE_BRANCH}" 2>/dev/null || true
+            git fetch origin "${DEV_BRANCH}"
+            git push origin "refs/remotes/origin/${DEV_BRANCH}:refs/heads/${RELEASE_BRANCH}"
+          fi
+
+          if [ "$SKIP_MERGE_BACK" = "true" ] || [ "$DEV_BRANCH" = "$MAIN_BRANCH" ]; then
+            TARGET_BRANCH="$DEV_BRANCH"
+          else
+            TARGET_BRANCH="$MAIN_BRANCH"
+          fi
+
+          git fetch origin "$TARGET_BRANCH" "$RELEASE_BRANCH"
+          COMMIT_COUNT=$(git rev-list --count "origin/${TARGET_BRANCH}..origin/${RELEASE_BRANCH}")
+          if [ "$COMMIT_COUNT" -eq 0 ] && [ -n "$RELEASE_VERSION" ]; then
+            echo "Manual release (${NEW_TAG}): no commits between ${TARGET_BRANCH} and ${RELEASE_BRANCH}. Skipping pull request."
+            finalize_release_on_branch "$TARGET_BRANCH"
+
+            if [ "$TARGET_BRANCH" = "$MAIN_BRANCH" ] && [ "$DEV_BRANCH" != "$MAIN_BRANCH" ]; then
+              sync_dev_from_main
+            fi
+
+            git push origin --delete "${RELEASE_BRANCH}" 2>/dev/null || true
+            exit 0
+          fi
+
+          echo "Creating release pull request ${RELEASE_BRANCH} -> ${TARGET_BRANCH}"
+
+          gh pr create \
+            --title "Release ${NEW_TAG}" \
+            --body-file /tmp/release_notes.md \
+            --base "$TARGET_BRANCH" \
+            --head "$RELEASE_BRANCH"
+
+          PR_NUMBER=$(gh pr list --head "$RELEASE_BRANCH" --base "$TARGET_BRANCH" --json number --jq '.[0].number')
+          gh pr merge "$PR_NUMBER" --merge --admin
+
+          finalize_release_on_branch "$TARGET_BRANCH"
+
+          if [ "$TARGET_BRANCH" = "$MAIN_BRANCH" ] && [ "$DEV_BRANCH" != "$MAIN_BRANCH" ]; then
+            sync_dev_from_main
+          fi
+
+          git push origin --delete "${RELEASE_BRANCH}" 2>/dev/null || true
+
+      - name: Merge dev branch into main branch
+        if: ${{ !inputs.SINGLE_RELEASE_PR && !inputs.SKIP_MERGE_BACK && !inputs.BACKPORT }}
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          TMP_BRANCH: tmp-release-to-main-${{ github.run_id }}-${{ github.run_attempt }}
+          DEV_BRANCH: ${{ inputs.BACKPORT && inputs.RELEASE_REF || inputs.DEV_BRANCH }}
+          MAIN_BRANCH: ${{ inputs.MAIN_BRANCH }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch origin
+          echo "Deleting branch ${{ env.TMP_BRANCH }}..."
+          git branch -D "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+          git push origin --delete "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+          echo "Checking out branch ${{ env.TMP_BRANCH }}..."
+          git checkout "${{ env.MAIN_BRANCH }}"
+          git pull
+          git checkout -b "${{ env.TMP_BRANCH }}"
+          git push origin "${{ env.TMP_BRANCH }}"
+          echo "Merging ${{ env.DEV_BRANCH }} into ${{ env.MAIN_BRANCH }} via ${{ env.TMP_BRANCH }}..."
+          git merge --no-ff --allow-unrelated-histories "origin/${{ env.DEV_BRANCH }}" -m "Merge ${{ env.DEV_BRANCH }} into ${{ env.MAIN_BRANCH }} [auto][skip ci]" --strategy-option theirs
+          git push origin "${{ env.TMP_BRANCH }}"
+          echo "Creating PR for branch ${{ env.TMP_BRANCH }}..."
+          gh pr create --title "Merge ${{ env.DEV_BRANCH }} into ${{ env.MAIN_BRANCH }} [skip ci]" --body "Auto-generated PR" --base "${{ env.MAIN_BRANCH }}" --head "${{ env.TMP_BRANCH }}"
+          PR_NUMBER=$(gh pr list --head "${{ env.TMP_BRANCH }}" --base "${{ env.MAIN_BRANCH }}" --json number --jq '.[0].number')
+          gh pr merge "$PR_NUMBER" --merge --admin
+          echo "Deleting branch ${{ env.TMP_BRANCH }}..."
+          git branch -D "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+          git push origin --delete "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+
+      - name: Merge main branch back into dev branch
+        if: ${{ !inputs.SINGLE_RELEASE_PR && !inputs.SKIP_MERGE_BACK && !inputs.BACKPORT }}
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          TMP_BRANCH: tmp-release-to-dev-${{ github.run_id }}-${{ github.run_attempt }}
+          DEV_BRANCH: ${{ inputs.BACKPORT && inputs.RELEASE_REF || inputs.DEV_BRANCH }}
+          MAIN_BRANCH: ${{ inputs.MAIN_BRANCH }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch origin
+          echo "Deleting branch ${{ env.TMP_BRANCH }}..."
+          git branch -D "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+          git push origin --delete "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+          echo "Checking out branch ${{ env.TMP_BRANCH }}..."
+          git checkout "${{ env.DEV_BRANCH }}"
+          git pull
+          git checkout -b "${{ env.TMP_BRANCH }}"
+          git push origin "${{ env.TMP_BRANCH }}"
+          echo "Merging ${{ env.MAIN_BRANCH }} into ${{ env.DEV_BRANCH }} via ${{ env.TMP_BRANCH }}..."
+          git merge --no-ff --allow-unrelated-histories "origin/${{ env.MAIN_BRANCH }}" -m "Merge ${{ env.MAIN_BRANCH }} into ${{ env.DEV_BRANCH }} [auto][skip ci]" --strategy-option theirs
+          git push origin "${{ env.TMP_BRANCH }}"
+          echo "Creating PR for branch ${{ env.TMP_BRANCH }}..."
+          gh pr create --title "Merge ${{ env.MAIN_BRANCH }} into ${{ env.DEV_BRANCH }} [skip ci]" --body "Auto-generated PR" --base "${{ env.DEV_BRANCH }}" --head "${{ env.TMP_BRANCH }}"
+          PR_NUMBER=$(gh pr list --head "${{ env.TMP_BRANCH }}" --base "${{ env.DEV_BRANCH }}" --json number --jq '.[0].number')
+          gh pr merge "$PR_NUMBER" --merge --admin
+          echo "Deleting branch ${{ env.TMP_BRANCH }}..."
+          git branch -D "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+          git push origin --delete "${{ env.TMP_BRANCH }}" 2>/dev/null || true
+
+  notify-slack:
+    name: Notify Slack
+    runs-on: ubuntu-latest
+    needs:
+      - plan
+      - publish
+      - merge-back
+    if: ${{ always() && inputs.ENABLED && inputs.SLACK_NOTIFICATION }}
+    permissions:
+      actions: read
+      contents: read
+    env:
+      REPO_NAME: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
+      RELEASE_REF: ${{ inputs.RELEASE_REF }}
+      DEV_BRANCH: ${{ inputs.BACKPORT && inputs.RELEASE_REF || inputs.DEV_BRANCH }}
+      MAIN_BRANCH: ${{ inputs.MAIN_BRANCH }}
+      BACKPORT: ${{ inputs.BACKPORT }}
+      SKIP_RELEASE: ${{ needs.plan.outputs.skip_release }}
+      NEW_TAG: ${{ needs.plan.outputs.new_tag }}
+      LATEST_TAG: ${{ needs.plan.outputs.latest_tag }}
+      NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
+      NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
+      CHANGED_LOCALES: ${{ needs.plan.outputs.changed_locales }}
+      SINGLE_RELEASE_PR: ${{ inputs.SINGLE_RELEASE_PR }}
+      SKIP_MERGE_BACK: ${{ inputs.SKIP_MERGE_BACK || inputs.BACKPORT }}
+      PLAN_RESULT: ${{ needs.plan.result }}
+      PUBLISH_RESULT: ${{ needs.publish.result }}
+      MERGE_BACK_RESULT: ${{ needs.merge-back.result }}
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_TOKEN: ${{ secrets.SEMVER_SLACK_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SEMVER_SLACK_CHANNEL }}
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+        run: |
+          if [ -z "${SLACK_TOKEN:-}" ] || [ -z "${SLACK_CHANNEL:-}" ]; then
+            echo "::warning::Slack notification skipped (SEMVER_SLACK_TOKEN or SEMVER_SLACK_CHANNEL not configured)."
+            exit 0
+          fi
+
+          if [ "$SKIP_RELEASE" = "true" ]; then
+            echo "Release was skipped. Slack notification suppressed."
+            exit 0
+          fi
+
+          MAX_SECTION_LENGTH=2400
+          MAX_ERROR_LENGTH=1800
+
+          if [ "$PLAN_RESULT" = "failure" ] || [ "$PUBLISH_RESULT" = "failure" ] || [ "$MERGE_BACK_RESULT" = "failure" ]; then
+            RELEASE_RESULT="failure"
+          elif [ "$SKIP_RELEASE" = "true" ]; then
+            RELEASE_RESULT="skipped"
+          else
+            RELEASE_RESULT="success"
+          fi
+
+          append_line() {
+            local line="$1"
+            if [ -n "$BODY" ]; then
+              BODY="${BODY}"$'\n'"${line}"
+            else
+              BODY="$line"
+            fi
+          }
+
+          if [ "$RELEASE_RESULT" = "failure" ]; then
+            HEADER_TEXT="Release failed: ${REPO_NAME}"
+            BODY="TAO extension \`${EXTENSION_NAME}\` release from \`${RELEASE_REF}\` failed."
+
+            FAILED_JOB=$(gh run view "$RUN_ID" --repo "$REPO_NAME" --json jobs -q \
+              '.jobs[] | select(.conclusion=="failure") | .name' 2>/dev/null | head -1 || true)
+            FAILED_STEP=$(gh run view "$RUN_ID" --repo "$REPO_NAME" --json jobs -q \
+              '.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name' 2>/dev/null | head -1 || true)
+
+            append_line "*Extension:* \`${EXTENSION_NAME}\`"
+            append_line "*Release ref:* \`${RELEASE_REF}\`"
+            if [ -n "$NEW_TAG" ]; then
+              append_line "*Planned tag:* \`${NEW_TAG}\` (previous \`${LATEST_TAG}\`)"
+            fi
+            append_line "*Plan:* \`${PLAN_RESULT:-unknown}\` · *Publish:* \`${PUBLISH_RESULT:-unknown}\` · *Merge-back:* \`${MERGE_BACK_RESULT:-unknown}\`"
+            if [ -n "$FAILED_JOB" ]; then
+              append_line "*Failed job:* \`${FAILED_JOB}\`"
+            fi
+            if [ -n "$FAILED_STEP" ]; then
+              append_line "*Failed step:* \`${FAILED_STEP}\`"
+            fi
+
+            ERROR_EXCERPT=""
+            if gh run view "$RUN_ID" --repo "$REPO_NAME" --log-failed > /tmp/release-failed.log 2>/dev/null; then
+              ERROR_EXCERPT=$(grep -iE '(::error::|^[[:space:]]*error:|fatal error|remote: error|remote rejected|GH00[0-9]|protected branch|failed to push|Process completed with exit code)' /tmp/release-failed.log \
+                | sed 's/\r$//' \
+                | awk '!seen[$0]++' \
+                | tail -20 || true)
+              if [ -z "$ERROR_EXCERPT" ]; then
+                ERROR_EXCERPT=$(tail -25 /tmp/release-failed.log | sed 's/\r$//' || true)
+              fi
+            fi
+
+            if [ "${#ERROR_EXCERPT}" -gt "$MAX_ERROR_LENGTH" ]; then
+              ERROR_EXCERPT="${ERROR_EXCERPT:0:$((MAX_ERROR_LENGTH - 3))}..."
+            fi
+
+            if [ -n "$ERROR_EXCERPT" ]; then
+              CODE_FENCE='```'
+              append_line "*Error details:*"
+              append_line "${CODE_FENCE}"
+              append_line "${ERROR_EXCERPT}"
+              append_line "${CODE_FENCE}"
+            else
+              append_line "Check the workflow logs for details."
+            fi
+
+            PRIMARY_URL="$RUN_URL"
+            SECONDARY_URL=""
+            PRIMARY_TEXT="View failed run"
+            SECONDARY_TEXT=""
+          elif [ "$RELEASE_RESULT" = "skipped" ]; then
+            HEADER_TEXT="Release skipped: ${REPO_NAME}"
+            BODY=""
+            append_line "TAO extension \`${EXTENSION_NAME}\` on \`${RELEASE_REF}\` — no release-worthy commits since \`${LATEST_TAG}\`."
+            append_line "*Extension:* \`${EXTENSION_NAME}\`"
+            append_line "*Release ref:* \`${RELEASE_REF}\`"
+            append_line "*Latest tag:* \`${LATEST_TAG}\`"
+            PRIMARY_URL="$RUN_URL"
+            SECONDARY_URL=""
+            PRIMARY_TEXT="View workflow run"
+            SECONDARY_TEXT=""
+          else
+            RELEASE_URL="https://github.com/${REPO_NAME}/releases/tag/${NEW_TAG}"
+            if [ "$BACKPORT" = "true" ]; then
+              HEADER_TEXT="Backport release: ${REPO_NAME} ${NEW_TAG}"
+              BODY=""
+              append_line "TAO extension \`${EXTENSION_NAME}\` backport \`${NEW_TAG}\` tagged on \`${RELEASE_REF}\`."
+              append_line "*Extension:* \`${EXTENSION_NAME}\`"
+              append_line "*Backport branch:* \`${RELEASE_REF}\`"
+              append_line "*Version:* \`${NEW_TAG}\` (since \`${LATEST_TAG}\`)"
+              append_line "*Workflow:* <${RUN_URL}|View workflow run>"
+
+              RELEASE_NOTES=$(gh release view "$NEW_TAG" --repo "$REPO_NAME" --json body -q .body 2>/dev/null || echo "")
+              if [ -n "$RELEASE_NOTES" ]; then
+                RELEASE_NOTES=$(printf '%s' "$RELEASE_NOTES" \
+                  | sed 's/\*\*\([^*]*\)\*\*/*\1*/g' \
+                  | sed 's/\[\([^]]*\)\](\([^)]*\))/<\2|\1>/g')
+                append_line ""
+                append_line "*Release notes:*"
+                append_line "${RELEASE_NOTES}"
+              fi
+
+              PRIMARY_URL="$RELEASE_URL"
+              SECONDARY_URL="$RUN_URL"
+              PRIMARY_TEXT="View release"
+              SECONDARY_TEXT="View workflow run"
+            else
+            HEADER_TEXT="New Release: ${REPO_NAME} ${NEW_TAG}"
+            BODY=""
+            if [ "$NEEDS_FE_BUILD" = "true" ]; then
+              FE_STATUS="built"
+            else
+              FE_STATUS="skipped"
+            fi
+
+            if [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
+              if [ -n "$CHANGED_LOCALES" ]; then
+                LOCALE_STATUS="compiled (${CHANGED_LOCALES})"
+              else
+                LOCALE_STATUS="compiled"
+              fi
+            else
+              LOCALE_STATUS="skipped"
+            fi
+
+            INTEGRATION_STATUS="not requested"
+            case "$MERGE_BACK_RESULT" in
+              success)
+                if [ "$SINGLE_RELEASE_PR" = "true" ]; then
+                  if [ "$DEV_BRANCH" = "$MAIN_BRANCH" ] || [ "$SKIP_MERGE_BACK" = "true" ]; then
+                    INTEGRATION_STATUS="merged into \`${DEV_BRANCH}\` via release PR"
+                  else
+                    INTEGRATION_STATUS="merged into \`${MAIN_BRANCH}\` via release PR and synced \`${DEV_BRANCH}\`"
+                  fi
+                else
+                  INTEGRATION_STATUS="synced \`${DEV_BRANCH}\` and \`${MAIN_BRANCH}\`"
+                fi
+                ;;
+              skipped)
+                INTEGRATION_STATUS="branch sync skipped"
+                ;;
+            esac
+
+            RELEASE_PR_URL=""
+            if [ "$SINGLE_RELEASE_PR" = "true" ] && [ -n "$NEW_TAG" ]; then
+              RELEASE_PR_URL=$(gh pr list --repo "$REPO_NAME" --state merged --search "Release ${NEW_TAG} in:title" --json url --jq '.[0].url' 2>/dev/null || true)
+            fi
+
+            append_line "*Extension:* \`${EXTENSION_NAME}\`"
+            append_line "*Release ref:* \`${RELEASE_REF}\`"
+            append_line "*Version:* \`${NEW_TAG}\` (previous \`${LATEST_TAG}\`)"
+            append_line "*Frontend assets:* ${FE_STATUS}"
+            append_line "*Locale assets:* ${LOCALE_STATUS}"
+            append_line "*Integration:* ${INTEGRATION_STATUS}"
+            if [ -n "$RELEASE_PR_URL" ] && [ "$RELEASE_PR_URL" != "null" ]; then
+              append_line "*Release PR:* <${RELEASE_PR_URL}|Release ${NEW_TAG}>"
+            fi
+            append_line "*Workflow:* <${RUN_URL}|View workflow run>"
+
+            RELEASE_NOTES=$(gh release view "$NEW_TAG" --repo "$REPO_NAME" --json body -q .body 2>/dev/null || echo "")
+            if [ -n "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES=$(printf '%s' "$RELEASE_NOTES" \
+                | sed 's/\*\*\([^*]*\)\*\*/*\1*/g' \
+                | sed 's/\[\([^]]*\)\](\([^)]*\))/<\2|\1>/g')
+              append_line ""
+              append_line "*Release notes:*"
+              append_line "${RELEASE_NOTES}"
+            fi
+
+            PRIMARY_URL="$RELEASE_URL"
+            SECONDARY_URL="$RUN_URL"
+            PRIMARY_TEXT="View release"
+            SECONDARY_TEXT="View workflow run"
+            fi
+          fi
+
+          if [ "${#BODY}" -gt "$MAX_SECTION_LENGTH" ]; then
+            BODY="${BODY:0:$((MAX_SECTION_LENGTH - 3))}..."
+          fi
+
+          if [ -n "$SECONDARY_URL" ]; then
+            PAYLOAD=$(jq -n \
+              --arg channel "$SLACK_CHANNEL" \
+              --arg header_text "$HEADER_TEXT" \
+              --arg body "$BODY" \
+              --arg primary_url "$PRIMARY_URL" \
+              --arg primary_text "$PRIMARY_TEXT" \
+              --arg secondary_url "$SECONDARY_URL" \
+              --arg secondary_text "$SECONDARY_TEXT" \
+              '{
+                channel: $channel,
+                text: ($header_text + "\n" + $primary_url),
+                blocks: [
+                  {
+                    type: "header",
+                    text: {
+                      type: "plain_text",
+                      text: $header_text,
+                      emoji: true
+                    }
+                  },
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: $body
+                    }
+                  },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        text: {
+                          type: "plain_text",
+                          text: $primary_text,
+                          emoji: true
+                        },
+                        url: $primary_url
+                      },
+                      {
+                        type: "button",
+                        text: {
+                          type: "plain_text",
+                          text: $secondary_text,
+                          emoji: true
+                        },
+                        url: $secondary_url
+                      }
+                    ]
+                  }
+                ]
+              }')
+          else
+            PAYLOAD=$(jq -n \
+              --arg channel "$SLACK_CHANNEL" \
+              --arg header_text "$HEADER_TEXT" \
+              --arg body "$BODY" \
+              --arg primary_url "$PRIMARY_URL" \
+              --arg primary_text "$PRIMARY_TEXT" \
+              '{
+                channel: $channel,
+                text: ($header_text + "\n" + $primary_url),
+                blocks: [
+                  {
+                    type: "header",
+                    text: {
+                      type: "plain_text",
+                      text: $header_text,
+                      emoji: true
+                    }
+                  },
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: $body
+                    }
+                  },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        text: {
+                          type: "plain_text",
+                          text: $primary_text,
+                          emoji: true
+                        },
+                        url: $primary_url
+                      }
+                    ]
+                  }
+                ]
+              }')
+          fi
+
+          if ! RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 2 \
+            --retry-connrefused \
+            -H "Authorization: Bearer $SLACK_TOKEN" \
+            -H "Content-type: application/json" \
+            --data "$PAYLOAD"); then
+            echo "::warning::Slack notification transport error"
+            exit 0
+          fi
+
+          if ! echo "$RESPONSE" | jq -e '.ok' > /dev/null 2>&1; then
+            echo "::warning::Slack notification failed: $(echo "$RESPONSE" | jq -r '.error // "unknown error"')"
+          fi
