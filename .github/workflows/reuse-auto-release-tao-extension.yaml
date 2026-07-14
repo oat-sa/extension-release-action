@@ -108,7 +108,7 @@ on:
         type: string
         default: '8.3'
       TAO_COMPOSER_INSTALL_COMMAND:
-        description: 'Optional command to install PHP dependencies before frontend build. Leave empty to run composer install automatically when composer.json exists under TAO_ROOT_PATH.'
+        description: 'Optional command to install PHP dependencies before frontend build. Leave empty to generate composer-release.json and install dependencies when composer.json exists under TAO_ROOT_PATH.'
         required: false
         type: string
         default: ''
@@ -793,6 +793,7 @@ jobs:
           TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
           TAO_COMPOSER_INSTALL_COMMAND: ${{ inputs.TAO_COMPOSER_INSTALL_COMMAND }}
           TAO_COMPOSER_ALLOW_PLUGINS: ${{ inputs.TAO_COMPOSER_ALLOW_PLUGINS }}
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
           NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
           NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
         run: |
@@ -824,6 +825,53 @@ jobs:
               echo "Allowing Composer plugin: $plugin"
               composer config --no-plugins "allow-plugins.$plugin" true
             done
+          }
+
+          install_tao_composer_dependencies() {
+            local root="$1"
+
+            if [ ! -f "$root/composer.json" ]; then
+              echo "No composer.json found under $root, skipping Composer install."
+              return 0
+            fi
+
+            if [ -d "$root/tao" ] || [ -d "$root/vendor" ]; then
+              echo "PHP dependencies already installed under $root, skipping Composer install."
+              return 0
+            fi
+
+            local package_name branch vcs_url
+            package_name="$(jq -r '.name // empty' "$root/composer.json")"
+            if [ -z "$package_name" ]; then
+              echo "::error::composer.json under $root is missing the package name."
+              exit 1
+            fi
+
+            branch="${RELEASE_REF:-${GITHUB_REF_NAME:-develop}}"
+            branch="${branch#refs/heads/}"
+            vcs_url="https://github.com/${package_name}.git"
+
+            echo "Generating composer-release.json for $package_name (branch: $branch) ..."
+            jq \
+              --arg branch "$branch" \
+              --arg pkg "$package_name" \
+              --arg vcs "$vcs_url" \
+              '
+                .require[$pkg] = ("dev-" + $branch + " as v99.99.99") |
+                .repositories = ((.repositories // []) + [{"type": "vcs", "url": $vcs}]) |
+                .config = (.config // {}) |
+                .config["allow-plugins"] = ((.config["allow-plugins"] // {}) + {"oat-sa/*": true}) |
+                del(.name)
+              ' "$root/composer.json" > "$root/composer-release.json"
+
+            echo "Composer file successfully generated:"
+            cat "$root/composer-release.json"
+
+            cd "$root"
+            allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
+            COMPOSER=composer-release.json composer install --no-interaction --prefer-dist --no-progress
+            rm -f composer-release.json
+            git checkout -- composer.json 2>/dev/null || true
           }
 
           prepare_tao_locale_workspace() {
@@ -870,21 +918,7 @@ jobs:
             exit 0
           fi
 
-          if [ ! -f "$TAO_ROOT_DIR/composer.json" ]; then
-            echo "No composer.json found under $TAO_ROOT_DIR, skipping composer install."
-            exit 0
-          fi
-
-          if [ ! -d "$TAO_ROOT_DIR/tao" ] && [ ! -d "$TAO_ROOT_DIR/vendor" ]; then
-            echo "Installing PHP dependencies in $TAO_ROOT_DIR"
-            cd "$TAO_ROOT_DIR"
-            allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
-            composer install --no-interaction --prefer-dist --no-progress
-            git checkout -- composer.json 2>/dev/null || true
-          else
-            echo "PHP dependencies already installed, preparing TAO workspace only."
-          fi
-
+          install_tao_composer_dependencies "$TAO_ROOT_DIR"
           prepare_tao_workspace
 
       - name: Resolve TAO extension context
