@@ -868,8 +868,10 @@ jobs:
             cat "$root/composer-release.json"
 
             cd "$root"
+            export COMPOSER=composer-release.json
             allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
-            COMPOSER=composer-release.json composer install --no-interaction --prefer-dist --no-progress
+            composer install --no-interaction --prefer-dist --no-progress
+            unset COMPOSER
             rm -f composer-release.json
             git checkout -- composer.json 2>/dev/null || true
           }
