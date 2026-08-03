@@ -819,11 +819,13 @@ jobs:
 
           # composer-npm-bridge runs `npm ci --prefix views` for private @oat-sa-private deps.
           # Without registry auth, npm returns 404 for those packages.
+          # Scope NODE_AUTH_TOKEN to auth setup only; keep the token out of custom composer commands.
           if [ -n "${NODE_AUTH_TOKEN:-}" ] && command -v npm >/dev/null 2>&1; then
             npm config set //registry.npmjs.org/:_authToken="${NODE_AUTH_TOKEN}"
           elif [ -n "${NODE_AUTH_TOKEN:-}" ]; then
             echo "::warning::CI_NPM_READ_TOKEN is set but npm is unavailable; private package installs may fail with 404."
           fi
+          unset NODE_AUTH_TOKEN
 
           export COMPOSER_AUTH='{"github-oauth":{"github.com":"'"$GH_TOKEN"'"}}'
 
@@ -1104,6 +1106,9 @@ jobs:
               fi
             )
           fi
+
+          # Drop NODE_AUTH_TOKEN before custom setup/bundle commands so they cannot read it.
+          unset NODE_AUTH_TOKEN
 
           if [ -n "$TAO_BUILD_SETUP_COMMAND" ]; then
             echo "Running TAO build setup command"
