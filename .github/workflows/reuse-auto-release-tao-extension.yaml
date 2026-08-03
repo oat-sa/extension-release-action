@@ -166,6 +166,9 @@ on:
       SEMVER_GH_TOKEN:
         description: 'GitHub token with permissions to create tags, releases, and PRs. If not provided, uses the default GITHUB_TOKEN.'
         required: false
+      CI_NPM_READ_TOKEN:
+        description: 'npm token with read access to private @oat-sa-private packages. Used by composer-npm-bridge and frontend npm ci. Pass via secrets: inherit (org secret CI_NPM_READ_TOKEN).'
+        required: false
       SEMVER_SLACK_TOKEN:
         description: 'Slack bot token for release notifications. Required if SLACK_NOTIFICATION is true.'
         required: false
@@ -785,11 +788,13 @@ jobs:
         with:
           node-version: ${{ inputs.NODE_VERSION }}
           package-manager-cache: false
+          registry-url: https://registry.npmjs.org
 
       - name: Install PHP dependencies
         if: needs.plan.outputs.needs_fe_build == 'true' || needs.plan.outputs.needs_locale_compile == 'true'
         env:
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.CI_NPM_READ_TOKEN }}
           TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
           TAO_COMPOSER_INSTALL_COMMAND: ${{ inputs.TAO_COMPOSER_INSTALL_COMMAND }}
           TAO_COMPOSER_ALLOW_PLUGINS: ${{ inputs.TAO_COMPOSER_ALLOW_PLUGINS }}
@@ -810,6 +815,14 @@ jobs:
           if [ ! -d "$TAO_ROOT_DIR" ]; then
             echo "::error::Resolved TAO_ROOT_PATH does not exist: $TAO_ROOT_DIR"
             exit 1
+          fi
+
+          # composer-npm-bridge runs `npm ci --prefix views` for private @oat-sa-private deps.
+          # Without registry auth, npm returns 404 for those packages.
+          if [ -n "${NODE_AUTH_TOKEN:-}" ] && command -v npm >/dev/null 2>&1; then
+            npm config set //registry.npmjs.org/:_authToken="${NODE_AUTH_TOKEN}"
+          elif [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::warning::CI_NPM_READ_TOKEN is set but npm is unavailable; private package installs may fail with 404."
           fi
 
           export COMPOSER_AUTH='{"github-oauth":{"github.com":"'"$GH_TOKEN"'"}}'
@@ -1003,6 +1016,7 @@ jobs:
       - name: Build frontend bundles
         if: needs.plan.outputs.needs_fe_build == 'true'
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.CI_NPM_READ_TOKEN }}
           TAO_BUILD_WORKDIR: ${{ inputs.TAO_BUILD_WORKDIR }}
           TAO_BUILD_SETUP_COMMAND: ${{ inputs.TAO_BUILD_SETUP_COMMAND }}
           TAO_JS_BUNDLE_COMMAND: ${{ inputs.TAO_JS_BUNDLE_COMMAND }}
