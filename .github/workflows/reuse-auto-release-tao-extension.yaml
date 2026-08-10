@@ -876,7 +876,7 @@ jobs:
                 .repositories = ((.repositories // []) + [{"type": "vcs", "url": $vcs}]) |
                 .config = (.config // {}) |
                 .config["allow-plugins"] = ((.config["allow-plugins"] // {}) + {"oat-sa/*": true}) |
-                del(.name)
+                del(.name) | del(.autoload)
               ' "$root/composer.json" > "$root/composer-release.json"
 
             echo "Composer file successfully generated:"
