@@ -915,14 +915,14 @@ jobs:
               --arg pkg "$package_name" \
               '
                 .require[$pkg] = "99.99.99" |
-                .repositories = ((.repositories // []) + [{
+                .repositories = ([{
                   "type": "path",
                   "url": ".",
                   "options": {
                     "symlink": false,
                     "versions": {($pkg): "99.99.99"}
                   }
-                }]) |
+                }] + (.repositories // [])) |
                 .config = (.config // {}) |
                 .config["allow-plugins"] = ((.config["allow-plugins"] // {}) + {"oat-sa/*": true}) |
                 del(.name) | del(.autoload)
