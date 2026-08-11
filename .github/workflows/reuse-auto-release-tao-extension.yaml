@@ -697,12 +697,14 @@ jobs:
                 /*) EXTENSION_DIR="$TAO_EXTENSION_PATH" ;;
                 *) EXTENSION_DIR="$REPO_ROOT/${TAO_EXTENSION_PATH#./}" ;;
               esac
-            elif [ -f "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME/manifest.php" ]; then
-              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
+              # Prefer the git checkout source over a Composer-installed copy under
+              # $TAO_EXTENSION_NAME/ so locale discovery uses the real extension tree.
               EXTENSION_DIR="$TAO_ROOT_DIR"
             elif [ -f "$REPO_ROOT/manifest.php" ]; then
               EXTENSION_DIR="$REPO_ROOT"
+            elif [ -f "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME/manifest.php" ]; then
+              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             elif [ -d "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME" ]; then
               EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             else
@@ -1059,12 +1061,14 @@ jobs:
 
           if [ -n "$TAO_EXTENSION_PATH" ]; then
             EXTENSION_DIR="$(resolve_path "$REPO_ROOT" "$TAO_EXTENSION_PATH")"
-          elif [ -f "$EXPECTED_EXTENSION_DIR/manifest.php" ]; then
-            EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
           elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
+            # Prefer the git checkout source over a Composer-installed duplicate under
+            # $TAO_EXTENSION_NAME/ so builds and commits update the real tree, not a nested copy.
             EXTENSION_DIR="$TAO_ROOT_DIR"
           elif [ -f "$REPO_ROOT/manifest.php" ]; then
             EXTENSION_DIR="$REPO_ROOT"
+          elif [ -f "$EXPECTED_EXTENSION_DIR/manifest.php" ]; then
+            EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
           elif [ -d "$EXPECTED_EXTENSION_DIR" ]; then
             EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
           else
@@ -1077,19 +1081,40 @@ jobs:
 
           PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
 
-          if [ ! -f "$EXPECTED_EXTENSION_DIR/manifest.php" ] && [ -f "$EXTENSION_DIR/manifest.php" ]; then
-            if [ "$IS_TAO_CORE" = "true" ]; then
-              # Confirmed tao-core: a non-extension tao/ directory (Crowdin mirror)
-              # must not be replaced with a discovery symlink.
-              echo "Confirmed tao-core package; skipping discovery symlink at $EXPECTED_EXTENSION_DIR."
-              EXPECTED_EXTENSION_DIR="$EXTENSION_DIR"
-            elif [ -e "$EXPECTED_EXTENSION_DIR" ] && [ ! -L "$EXPECTED_EXTENSION_DIR" ]; then
-              echo "::error::$EXPECTED_EXTENSION_DIR exists but is not the extension root (missing manifest.php)."
-              exit 1
+          # Grunt/PHP discover extensions at $TAO_ROOT/$TAO_EXTENSION_NAME. Point that
+          # path at the source checkout via a temporary symlink. Never keep a Composer-
+          # installed real copy there — it would get committed as a nested duplicate.
+          if [ "$IS_TAO_CORE" = "true" ]; then
+            echo "Confirmed tao-core package; skipping discovery symlink at $EXPECTED_EXTENSION_DIR."
+            EXPECTED_EXTENSION_DIR="$EXTENSION_DIR"
+          elif [ -f "$EXTENSION_DIR/manifest.php" ]; then
+            PHYSICAL_EXPECTED=""
+            if [ -e "$EXPECTED_EXTENSION_DIR" ] || [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+              PHYSICAL_EXPECTED="$(realpath "$EXPECTED_EXTENSION_DIR")"
+            fi
+
+            if [ -n "$PHYSICAL_EXPECTED" ] && [ "$PHYSICAL_EXPECTED" = "$PHYSICAL_EXTENSION_DIR" ]; then
+              if [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+                echo "Extension discovery symlink already in place: $EXPECTED_EXTENSION_DIR"
+              else
+                echo "Extension source is already at discovery path $EXPECTED_EXTENSION_DIR"
+              fi
             else
+              if [ -z "$TAO_EXTENSION_NAME" ] || [ "$TAO_EXTENSION_NAME" = "." ] || [ "$TAO_EXTENSION_NAME" = ".." ]; then
+                echo "::error::Refusing to create extension discovery path with invalid TAO_EXTENSION_NAME='$TAO_EXTENSION_NAME'."
+                exit 1
+              fi
+              if [ "$(realpath "$EXPECTED_EXTENSION_DIR/.." 2>/dev/null || true)" != "$(realpath "$TAO_ROOT_DIR")" ]; then
+                echo "::error::Refusing to replace unexpected discovery path $EXPECTED_EXTENSION_DIR (not a direct child of $TAO_ROOT_DIR)."
+                exit 1
+              fi
+              if [ -e "$EXPECTED_EXTENSION_DIR" ] || [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+                echo "Replacing $EXPECTED_EXTENSION_DIR with a symlink to the extension source to avoid a nested duplicate."
+                rm -rf "$EXPECTED_EXTENSION_DIR"
+              fi
               EXTENSION_LINK_TARGET="$(realpath --relative-to="$TAO_ROOT_DIR" "$EXTENSION_DIR")"
-              echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
               ln -sfn "$EXTENSION_LINK_TARGET" "$EXPECTED_EXTENSION_DIR"
+              echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
             fi
           fi
 
@@ -1365,6 +1390,13 @@ jobs:
           fi
 
           REPO_ROOT="$GITHUB_WORKSPACE"
+
+          # Drop the temporary $TAO_EXTENSION_NAME -> source symlink so it is not committed
+          # as a nested duplicate of the extension.
+          if [ -n "${EXPECTED_EXTENSION_DIR:-}" ] && [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+            echo "Removing temporary extension discovery symlink: $EXPECTED_EXTENSION_DIR"
+            rm -f "$EXPECTED_EXTENSION_DIR"
+          fi
 
           stage_generated_release_assets() {
             local root="$1"
