@@ -92,6 +92,11 @@ on:
         required: false
         type: string
         default: ''
+      TAO_IS_CORE:
+        description: 'Force tao-core layout handling ("true"/"false"). When empty, auto-detects from root composer.json package name oat-sa/tao-core.'
+        required: false
+        type: string
+        default: ''
       TAO_BUILD_WORKDIR:
         description: 'TAO frontend build working directory relative to TAO_ROOT_PATH.'
         required: false
@@ -692,12 +697,16 @@ jobs:
                 /*) EXTENSION_DIR="$TAO_EXTENSION_PATH" ;;
                 *) EXTENSION_DIR="$REPO_ROOT/${TAO_EXTENSION_PATH#./}" ;;
               esac
-            elif [ -d "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME" ]; then
-              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
+              # Prefer the git checkout source over a Composer-installed copy under
+              # $TAO_EXTENSION_NAME/ so locale discovery uses the real extension tree.
               EXTENSION_DIR="$TAO_ROOT_DIR"
             elif [ -f "$REPO_ROOT/manifest.php" ]; then
               EXTENSION_DIR="$REPO_ROOT"
+            elif [ -f "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME/manifest.php" ]; then
+              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
+            elif [ -d "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME" ]; then
+              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             else
               EXTENSION_DIR="$REPO_ROOT"
             fi
@@ -798,6 +807,7 @@ jobs:
           TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
           TAO_COMPOSER_INSTALL_COMMAND: ${{ inputs.TAO_COMPOSER_INSTALL_COMMAND }}
           TAO_COMPOSER_ALLOW_PLUGINS: ${{ inputs.TAO_COMPOSER_ALLOW_PLUGINS }}
+          TAO_IS_CORE: ${{ inputs.TAO_IS_CORE }}
           RELEASE_REF: ${{ inputs.RELEASE_REF }}
           NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
           NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
@@ -816,6 +826,28 @@ jobs:
             echo "::error::Resolved TAO_ROOT_PATH does not exist: $TAO_ROOT_DIR"
             exit 1
           fi
+
+          # Explicit tao-core predicate: optional TAO_IS_CORE input, else composer package name.
+          # Do not infer from root manifest.php — standard extensions also have that file.
+          is_tao_core_package() {
+            local root="${1:-.}"
+            local package_name=""
+            case "${TAO_IS_CORE:-}" in
+              true|TRUE|yes|YES|1) return 0 ;;
+              false|FALSE|no|NO|0) return 1 ;;
+            esac
+            [ -f "$root/composer.json" ] || return 1
+            package_name="$(jq -r '.name // empty' "$root/composer.json" 2>/dev/null || true)"
+            [ "$package_name" = "oat-sa/tao-core" ]
+          }
+
+          if is_tao_core_package "$TAO_ROOT_DIR"; then
+            IS_TAO_CORE=true
+          else
+            IS_TAO_CORE=false
+          fi
+          echo "IS_TAO_CORE=$IS_TAO_CORE"
+          echo "IS_TAO_CORE=$IS_TAO_CORE" >> "$GITHUB_ENV"
 
           # composer-npm-bridge runs `npm ci --prefix views` for private @oat-sa-private deps.
           # Without registry auth, npm returns 404 for those packages.
@@ -850,8 +882,22 @@ jobs:
               return 0
             fi
 
-            if [ -d "$root/tao" ] || [ -d "$root/vendor" ]; then
+            # Prefer a real TAO core install (tao/manifest.php) over a non-extension
+            # tao/ directory (e.g. tao-core's Crowdin mirror at tao/locales).
+            if [ -f "$root/tao/manifest.php" ] || [ -d "$root/vendor" ]; then
               echo "PHP dependencies already installed under $root, skipping Composer install."
+              return 0
+            fi
+
+            cd "$root"
+
+            # tao-core: install root composer.json directly. The self-require release
+            # wrapper would place oat-sa/tao-core under ./tao/ and conflict with tao/locales.
+            if [ "$IS_TAO_CORE" = "true" ]; then
+              echo "Installing Composer dependencies for TAO core at repository root ..."
+              allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
+              composer install --no-interaction --prefer-dist --no-progress
+              git checkout -- composer.json 2>/dev/null || true
               return 0
             fi
 
@@ -882,7 +928,6 @@ jobs:
             echo "Composer file successfully generated:"
             cat "$root/composer-release.json"
 
-            cd "$root"
             export COMPOSER=composer-release.json
             allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
             composer install --no-interaction --prefer-dist --no-progress
@@ -891,30 +936,45 @@ jobs:
             git checkout -- composer.json 2>/dev/null || true
           }
 
+          resolve_tao_core_stub_dir() {
+            local root="$1"
+            # For tao-core, write stubs into the extension root instead of under the
+            # non-extension Crowdin mirror at tao/.
+            if [ "$IS_TAO_CORE" = "true" ]; then
+              printf '%s' "$root"
+            else
+              printf '%s' "$root/tao"
+            fi
+          }
+
           prepare_tao_locale_workspace() {
             local root="$1"
+            local tao_dir
             local messages_json='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations":{}}'
 
-            echo "Preparing TAO workspace for locale compilation ..."
+            tao_dir="$(resolve_tao_core_stub_dir "$root")"
+            echo "Preparing TAO workspace for locale compilation (tao stubs: $tao_dir) ..."
             cd "$root"
-            mkdir -p tao/views/locales/en-US/
+            mkdir -p "$tao_dir/views/locales/en-US/"
             mkdir -p config/
             touch index.php
-            echo "$messages_json" > tao/views/locales/en-US/messages.json
+            echo "$messages_json" > "$tao_dir/views/locales/en-US/messages.json"
           }
 
           prepare_tao_frontend_workspace() {
             local root="$1"
+            local tao_dir
             local messages_json='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations":{}}'
 
-            echo "Preparing TAO workspace for frontend build ..."
+            tao_dir="$(resolve_tao_core_stub_dir "$root")"
+            echo "Preparing TAO workspace for frontend build (tao stubs: $tao_dir) ..."
             cd "$root"
             mkdir -p taoQtiItem/views/js/mathjax/
-            mkdir -p tao/views/locales/en-US/
+            mkdir -p "$tao_dir/views/locales/en-US/"
             mkdir -p config/
             touch taoQtiItem/views/js/mathjax/MathJax.js
             touch index.php
-            echo "$messages_json" > tao/views/locales/en-US/messages.json
+            echo "$messages_json" > "$tao_dir/views/locales/en-US/messages.json"
           }
 
           prepare_tao_workspace() {
@@ -944,6 +1004,7 @@ jobs:
           TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
           TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
           TAO_EXTENSION_PATH: ${{ inputs.TAO_EXTENSION_PATH }}
+          TAO_IS_CORE: ${{ inputs.TAO_IS_CORE }}
         run: |
           set -euo pipefail
 
@@ -960,6 +1021,31 @@ jobs:
             exit 1
           fi
 
+          is_tao_core_package() {
+            local root="${1:-.}"
+            local package_name=""
+            case "${TAO_IS_CORE:-}" in
+              true|TRUE|yes|YES|1) return 0 ;;
+              false|FALSE|no|NO|0) return 1 ;;
+            esac
+            if [ "${IS_TAO_CORE:-}" = "true" ]; then
+              return 0
+            fi
+            if [ "${IS_TAO_CORE:-}" = "false" ]; then
+              return 1
+            fi
+            [ -f "$root/composer.json" ] || return 1
+            package_name="$(jq -r '.name // empty' "$root/composer.json" 2>/dev/null || true)"
+            [ "$package_name" = "oat-sa/tao-core" ]
+          }
+
+          if is_tao_core_package "$TAO_ROOT_DIR"; then
+            IS_TAO_CORE=true
+          else
+            IS_TAO_CORE=false
+          fi
+          echo "IS_TAO_CORE=$IS_TAO_CORE" >> "$GITHUB_ENV"
+
           resolve_path() {
             local base="$1"
             local path="$2"
@@ -975,12 +1061,14 @@ jobs:
 
           if [ -n "$TAO_EXTENSION_PATH" ]; then
             EXTENSION_DIR="$(resolve_path "$REPO_ROOT" "$TAO_EXTENSION_PATH")"
-          elif [ -f "$EXPECTED_EXTENSION_DIR/manifest.php" ]; then
-            EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
           elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
+            # Prefer the git checkout source over a Composer-installed duplicate under
+            # $TAO_EXTENSION_NAME/ so builds and commits update the real tree, not a nested copy.
             EXTENSION_DIR="$TAO_ROOT_DIR"
           elif [ -f "$REPO_ROOT/manifest.php" ]; then
             EXTENSION_DIR="$REPO_ROOT"
+          elif [ -f "$EXPECTED_EXTENSION_DIR/manifest.php" ]; then
+            EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
           elif [ -d "$EXPECTED_EXTENSION_DIR" ]; then
             EXTENSION_DIR="$EXPECTED_EXTENSION_DIR"
           else
@@ -991,18 +1079,44 @@ jobs:
             echo "::warning::No manifest.php found for extension '$TAO_EXTENSION_NAME' under $EXTENSION_DIR."
           fi
 
-          if [ ! -f "$EXPECTED_EXTENSION_DIR/manifest.php" ] && [ -f "$EXTENSION_DIR/manifest.php" ]; then
-            if [ -e "$EXPECTED_EXTENSION_DIR" ] && [ ! -L "$EXPECTED_EXTENSION_DIR" ]; then
-              echo "::error::$EXPECTED_EXTENSION_DIR exists but is not the extension root (missing manifest.php)."
-              exit 1
+          PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
+
+          # Grunt/PHP discover extensions at $TAO_ROOT/$TAO_EXTENSION_NAME. Point that
+          # path at the source checkout via a temporary symlink. Never keep a Composer-
+          # installed real copy there — it would get committed as a nested duplicate.
+          if [ "$IS_TAO_CORE" = "true" ]; then
+            echo "Confirmed tao-core package; skipping discovery symlink at $EXPECTED_EXTENSION_DIR."
+            EXPECTED_EXTENSION_DIR="$EXTENSION_DIR"
+          elif [ -f "$EXTENSION_DIR/manifest.php" ]; then
+            PHYSICAL_EXPECTED=""
+            if [ -e "$EXPECTED_EXTENSION_DIR" ] || [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+              PHYSICAL_EXPECTED="$(realpath "$EXPECTED_EXTENSION_DIR")"
             fi
 
-            EXTENSION_LINK_TARGET="$(realpath --relative-to="$TAO_ROOT_DIR" "$EXTENSION_DIR")"
-            echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
-            ln -sfn "$EXTENSION_LINK_TARGET" "$EXPECTED_EXTENSION_DIR"
+            if [ -n "$PHYSICAL_EXPECTED" ] && [ "$PHYSICAL_EXPECTED" = "$PHYSICAL_EXTENSION_DIR" ]; then
+              if [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+                echo "Extension discovery symlink already in place: $EXPECTED_EXTENSION_DIR"
+              else
+                echo "Extension source is already at discovery path $EXPECTED_EXTENSION_DIR"
+              fi
+            else
+              if [ -z "$TAO_EXTENSION_NAME" ] || [ "$TAO_EXTENSION_NAME" = "." ] || [ "$TAO_EXTENSION_NAME" = ".." ]; then
+                echo "::error::Refusing to create extension discovery path with invalid TAO_EXTENSION_NAME='$TAO_EXTENSION_NAME'."
+                exit 1
+              fi
+              if [ "$(realpath "$EXPECTED_EXTENSION_DIR/.." 2>/dev/null || true)" != "$(realpath "$TAO_ROOT_DIR")" ]; then
+                echo "::error::Refusing to replace unexpected discovery path $EXPECTED_EXTENSION_DIR (not a direct child of $TAO_ROOT_DIR)."
+                exit 1
+              fi
+              if [ -e "$EXPECTED_EXTENSION_DIR" ] || [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+                echo "Replacing $EXPECTED_EXTENSION_DIR with a symlink to the extension source to avoid a nested duplicate."
+                rm -rf "$EXPECTED_EXTENSION_DIR"
+              fi
+              EXTENSION_LINK_TARGET="$(realpath --relative-to="$TAO_ROOT_DIR" "$EXTENSION_DIR")"
+              ln -sfn "$EXTENSION_LINK_TARGET" "$EXPECTED_EXTENSION_DIR"
+              echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
+            fi
           fi
-
-          PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
 
           echo "TAO root path: $TAO_ROOT_DIR"
           echo "TAO extension path: $EXTENSION_DIR"
@@ -1072,7 +1186,15 @@ jobs:
               *) BUILD_WORKDIR="$TAO_ROOT_DIR/${BUILD_WORKDIR#./}" ;;
             esac
 
-            if [ ! -d "$BUILD_WORKDIR" ] && [ -d "$TAO_ROOT_DIR/tao/views/build" ]; then
+            # Prefer the extension's own views/build (tao-core) when the default
+            # tao/views/build path is missing or is not a real TAO core install.
+            if { [ ! -d "$BUILD_WORKDIR" ] || [ ! -f "$BUILD_WORKDIR/package.json" ]; } \
+              && [ -f "$PHYSICAL_EXTENSION_DIR/views/build/package.json" ]; then
+              BUILD_WORKDIR="$PHYSICAL_EXTENSION_DIR/views/build"
+            fi
+
+            if { [ ! -d "$BUILD_WORKDIR" ] || [ ! -f "$BUILD_WORKDIR/package.json" ]; } \
+              && [ -f "$TAO_ROOT_DIR/tao/views/build/package.json" ]; then
               BUILD_WORKDIR="$TAO_ROOT_DIR/tao/views/build"
             fi
 
@@ -1081,15 +1203,48 @@ jobs:
               exit 1
             fi
 
-            if [ ! -f "$BUILD_WORKDIR/package.json" ] && [ -f "$TAO_ROOT_DIR/tao/views/build/package.json" ]; then
-              BUILD_WORKDIR="$TAO_ROOT_DIR/tao/views/build"
-            fi
-
             if [ ! -f "$BUILD_WORKDIR/package.json" ]; then
               echo "::error::No package.json found in TAO build workdir ($BUILD_WORKDIR). Set TAO_BUILD_WORKDIR to the directory that contains TAO core frontend dependencies (usually tao/views/build)."
               exit 1
             fi
           fi
+
+          # Grunt resolves the TAO dist root as ../../../ from views/build and expects
+          # extensions under <dist>/tao, <dist>/taoQtiItem, etc. For confirmed tao-core
+          # the checkout IS the extension, so expose it as <parent>/tao.
+          ensure_tao_core_grunt_layout() {
+            local extension_dir="$1"
+            local build_dir="$2"
+            local dist_root tao_link
+
+            if [ "${IS_TAO_CORE:-false}" != "true" ]; then
+              return 0
+            fi
+
+            if [ -z "$build_dir" ]; then
+              return 0
+            fi
+
+            if [ "$(realpath "$build_dir")" != "$(realpath "$extension_dir/views/build")" ]; then
+              return 0
+            fi
+
+            dist_root="$(dirname "$(realpath "$extension_dir")")"
+            tao_link="$dist_root/tao"
+
+            if [ -e "$tao_link" ] && [ ! -L "$tao_link" ]; then
+              echo "::error::Cannot create TAO dist symlink at $tao_link because a non-symlink path already exists. Grunt requires <dist>/tao for tao-core builds."
+              exit 1
+            fi
+
+            ln -sfn "$(realpath "$extension_dir")" "$tao_link"
+            echo "Linked TAO dist layout for grunt: $tao_link -> $(realpath "$extension_dir")"
+
+            mkdir -p "$dist_root/taoQtiItem/views/js/mathjax"
+            touch "$dist_root/taoQtiItem/views/js/mathjax/MathJax.js"
+          }
+
+          ensure_tao_core_grunt_layout "$PHYSICAL_EXTENSION_DIR" "$BUILD_WORKDIR"
 
           if [ -n "$BUILD_WORKDIR" ]; then
             echo "TAO build workdir: $BUILD_WORKDIR"
@@ -1105,6 +1260,21 @@ jobs:
                 npm install
               fi
             )
+
+            # Runtime AMD libs live in views/node_modules (see requirejs.build.json paths
+            # such as ../../../tao/views/node_modules/@oat-sa/tao-core-libs/...).
+            VIEWS_DIR="$(dirname "$BUILD_WORKDIR")"
+            if [ -f "$VIEWS_DIR/package.json" ]; then
+              echo "Installing TAO views runtime dependencies in $VIEWS_DIR"
+              (
+                cd "$VIEWS_DIR"
+                if [ -f package-lock.json ]; then
+                  npm ci
+                else
+                  npm install
+                fi
+              )
+            fi
           fi
 
           # Drop NODE_AUTH_TOKEN before custom setup/bundle commands so they cannot read it.
@@ -1164,17 +1334,33 @@ jobs:
           cat "$LOCALES_FILE"
 
           cd "$TAO_ROOT_DIR"
+
+          TRANSLATE_SCRIPT=""
+          if [ -f "$PHYSICAL_EXTENSION_DIR/scripts/taoTranslate.php" ]; then
+            TRANSLATE_SCRIPT="$PHYSICAL_EXTENSION_DIR/scripts/taoTranslate.php"
+          elif [ -f "$TAO_ROOT_DIR/tao/scripts/taoTranslate.php" ]; then
+            TRANSLATE_SCRIPT="$TAO_ROOT_DIR/tao/scripts/taoTranslate.php"
+          elif [ -f "$TAO_ROOT_DIR/scripts/taoTranslate.php" ]; then
+            TRANSLATE_SCRIPT="$TAO_ROOT_DIR/scripts/taoTranslate.php"
+          else
+            echo "::error::taoTranslate.php was not found under the extension or TAO root. Ensure Composer install completed successfully."
+            exit 1
+          fi
+
           while read -r LOCALE || [ -n "$LOCALE" ]; do
             [ -z "$LOCALE" ] && continue
 
-            EXPECTED_PO="${TAO_ROOT_DIR}/${TAO_EXTENSION_NAME}/locales/${LOCALE}/messages.po"
+            EXPECTED_PO="${EXTENSION_DIR}/locales/${LOCALE}/messages.po"
+            if [ ! -f "$EXPECTED_PO" ] && [ -f "${EXPECTED_EXTENSION_DIR}/locales/${LOCALE}/messages.po" ]; then
+              EXPECTED_PO="${EXPECTED_EXTENSION_DIR}/locales/${LOCALE}/messages.po"
+            fi
             if [ ! -f "$EXPECTED_PO" ]; then
-              echo "::error::Expected PO file for locale '${LOCALE}' was not found at ${EXPECTED_PO}. Ensure the extension symlink under ${TAO_EXTENSION_NAME}/ points to the extension root."
+              echo "::error::Expected PO file for locale '${LOCALE}' was not found at ${EXTENSION_DIR}/locales/${LOCALE}/messages.po. Ensure the extension root is resolved correctly for ${TAO_EXTENSION_NAME}."
               exit 1
             fi
 
             echo "Running TAO locale compile command for locale ${LOCALE}"
-            TAO_TRANSLATE_STANDALONE=1 php tao/scripts/taoTranslate.php -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
+            TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
           done < "$LOCALES_FILE"
 
       - name: Commit generated release assets
@@ -1204,6 +1390,13 @@ jobs:
           fi
 
           REPO_ROOT="$GITHUB_WORKSPACE"
+
+          # Drop the temporary $TAO_EXTENSION_NAME -> source symlink so it is not committed
+          # as a nested duplicate of the extension.
+          if [ -n "${EXPECTED_EXTENSION_DIR:-}" ] && [ -L "$EXPECTED_EXTENSION_DIR" ]; then
+            echo "Removing temporary extension discovery symlink: $EXPECTED_EXTENSION_DIR"
+            rm -f "$EXPECTED_EXTENSION_DIR"
+          fi
 
           stage_generated_release_assets() {
             local root="$1"
@@ -1350,8 +1543,7 @@ jobs:
           git config --global user.email "$BOT_USER_EMAIL"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
-          echo "**Release notes**" > /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
+          > /tmp/release_notes.md
           if git rev-parse -q --verify "refs/tags/${LATEST_TAG}" >/dev/null; then
             echo "Full change list [here](https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${NEW_TAG})" >> /tmp/release_notes.md
             echo "" >> /tmp/release_notes.md
