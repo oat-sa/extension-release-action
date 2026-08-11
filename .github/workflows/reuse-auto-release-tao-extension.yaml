@@ -1132,6 +1132,44 @@ jobs:
             fi
           fi
 
+          # Grunt resolves the TAO dist root as ../../../ from views/build and expects
+          # extensions under <dist>/tao, <dist>/taoQtiItem, etc. For tao-core the
+          # checkout IS the extension, so expose it as <parent>/tao and install the
+          # runtime views dependencies that requirejs.build.json references.
+          ensure_tao_core_grunt_layout() {
+            local extension_dir="$1"
+            local build_dir="$2"
+            local dist_root tao_link
+
+            if [ -z "$build_dir" ]; then
+              return 0
+            fi
+
+            if [ "$(realpath "$extension_dir")" != "$(realpath "$TAO_ROOT_DIR")" ]; then
+              return 0
+            fi
+
+            if [ "$(realpath "$build_dir")" != "$(realpath "$extension_dir/views/build")" ]; then
+              return 0
+            fi
+
+            dist_root="$(dirname "$(realpath "$extension_dir")")"
+            tao_link="$dist_root/tao"
+
+            if [ -e "$tao_link" ] && [ ! -L "$tao_link" ]; then
+              echo "::error::Cannot create TAO dist symlink at $tao_link because a non-symlink path already exists. Grunt requires <dist>/tao for tao-core builds."
+              exit 1
+            fi
+
+            ln -sfn "$(realpath "$extension_dir")" "$tao_link"
+            echo "Linked TAO dist layout for grunt: $tao_link -> $(realpath "$extension_dir")"
+
+            mkdir -p "$dist_root/taoQtiItem/views/js/mathjax"
+            touch "$dist_root/taoQtiItem/views/js/mathjax/MathJax.js"
+          }
+
+          ensure_tao_core_grunt_layout "$PHYSICAL_EXTENSION_DIR" "$BUILD_WORKDIR"
+
           if [ -n "$BUILD_WORKDIR" ]; then
             echo "TAO build workdir: $BUILD_WORKDIR"
           fi
@@ -1146,6 +1184,21 @@ jobs:
                 npm install
               fi
             )
+
+            # Runtime AMD libs live in views/node_modules (see requirejs.build.json paths
+            # such as ../../../tao/views/node_modules/@oat-sa/tao-core-libs/...).
+            VIEWS_DIR="$(dirname "$BUILD_WORKDIR")"
+            if [ -f "$VIEWS_DIR/package.json" ]; then
+              echo "Installing TAO views runtime dependencies in $VIEWS_DIR"
+              (
+                cd "$VIEWS_DIR"
+                if [ -f package-lock.json ]; then
+                  npm ci
+                else
+                  npm install
+                fi
+              )
+            fi
           fi
 
           # Drop NODE_AUTH_TOKEN before custom setup/bundle commands so they cannot read it.
