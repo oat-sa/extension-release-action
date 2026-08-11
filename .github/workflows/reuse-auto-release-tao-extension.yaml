@@ -92,6 +92,11 @@ on:
         required: false
         type: string
         default: ''
+      TAO_IS_CORE:
+        description: 'Force tao-core layout handling ("true"/"false"). When empty, auto-detects from root composer.json package name oat-sa/tao-core.'
+        required: false
+        type: string
+        default: ''
       TAO_BUILD_WORKDIR:
         description: 'TAO frontend build working directory relative to TAO_ROOT_PATH.'
         required: false
@@ -800,6 +805,7 @@ jobs:
           TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
           TAO_COMPOSER_INSTALL_COMMAND: ${{ inputs.TAO_COMPOSER_INSTALL_COMMAND }}
           TAO_COMPOSER_ALLOW_PLUGINS: ${{ inputs.TAO_COMPOSER_ALLOW_PLUGINS }}
+          TAO_IS_CORE: ${{ inputs.TAO_IS_CORE }}
           RELEASE_REF: ${{ inputs.RELEASE_REF }}
           NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
           NEEDS_LOCALE_COMPILE: ${{ needs.plan.outputs.needs_locale_compile }}
@@ -818,6 +824,28 @@ jobs:
             echo "::error::Resolved TAO_ROOT_PATH does not exist: $TAO_ROOT_DIR"
             exit 1
           fi
+
+          # Explicit tao-core predicate: optional TAO_IS_CORE input, else composer package name.
+          # Do not infer from root manifest.php — standard extensions also have that file.
+          is_tao_core_package() {
+            local root="${1:-.}"
+            local package_name=""
+            case "${TAO_IS_CORE:-}" in
+              true|TRUE|yes|YES|1) return 0 ;;
+              false|FALSE|no|NO|0) return 1 ;;
+            esac
+            [ -f "$root/composer.json" ] || return 1
+            package_name="$(jq -r '.name // empty' "$root/composer.json" 2>/dev/null || true)"
+            [ "$package_name" = "oat-sa/tao-core" ]
+          }
+
+          if is_tao_core_package "$TAO_ROOT_DIR"; then
+            IS_TAO_CORE=true
+          else
+            IS_TAO_CORE=false
+          fi
+          echo "IS_TAO_CORE=$IS_TAO_CORE"
+          echo "IS_TAO_CORE=$IS_TAO_CORE" >> "$GITHUB_ENV"
 
           # composer-npm-bridge runs `npm ci --prefix views` for private @oat-sa-private deps.
           # Without registry auth, npm returns 404 for those packages.
@@ -861,10 +889,9 @@ jobs:
 
             cd "$root"
 
-            # tao-core layout: the repository root IS the tao extension. Install its
-            # composer.json directly instead of the self-require release wrapper, which
-            # would try to place oat-sa/tao-core under ./tao/ and conflict with tao/locales.
-            if [ -f "$root/manifest.php" ] && [ ! -f "$root/tao/manifest.php" ]; then
+            # tao-core: install root composer.json directly. The self-require release
+            # wrapper would place oat-sa/tao-core under ./tao/ and conflict with tao/locales.
+            if [ "$IS_TAO_CORE" = "true" ]; then
               echo "Installing Composer dependencies for TAO core at repository root ..."
               allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
               composer install --no-interaction --prefer-dist --no-progress
@@ -909,9 +936,9 @@ jobs:
 
           resolve_tao_core_stub_dir() {
             local root="$1"
-            # When the TAO root itself is the tao extension (tao-core), write stubs into
-            # the root instead of under a non-extension tao/ directory.
-            if [ -f "$root/manifest.php" ] && [ ! -f "$root/tao/manifest.php" ]; then
+            # For tao-core, write stubs into the extension root instead of under the
+            # non-extension Crowdin mirror at tao/.
+            if [ "$IS_TAO_CORE" = "true" ]; then
               printf '%s' "$root"
             else
               printf '%s' "$root/tao"
@@ -975,6 +1002,7 @@ jobs:
           TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
           TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
           TAO_EXTENSION_PATH: ${{ inputs.TAO_EXTENSION_PATH }}
+          TAO_IS_CORE: ${{ inputs.TAO_IS_CORE }}
         run: |
           set -euo pipefail
 
@@ -990,6 +1018,31 @@ jobs:
             echo "::error::Resolved TAO_ROOT_PATH does not exist: $TAO_ROOT_DIR"
             exit 1
           fi
+
+          is_tao_core_package() {
+            local root="${1:-.}"
+            local package_name=""
+            case "${TAO_IS_CORE:-}" in
+              true|TRUE|yes|YES|1) return 0 ;;
+              false|FALSE|no|NO|0) return 1 ;;
+            esac
+            if [ "${IS_TAO_CORE:-}" = "true" ]; then
+              return 0
+            fi
+            if [ "${IS_TAO_CORE:-}" = "false" ]; then
+              return 1
+            fi
+            [ -f "$root/composer.json" ] || return 1
+            package_name="$(jq -r '.name // empty' "$root/composer.json" 2>/dev/null || true)"
+            [ "$package_name" = "oat-sa/tao-core" ]
+          }
+
+          if is_tao_core_package "$TAO_ROOT_DIR"; then
+            IS_TAO_CORE=true
+          else
+            IS_TAO_CORE=false
+          fi
+          echo "IS_TAO_CORE=$IS_TAO_CORE" >> "$GITHUB_ENV"
 
           resolve_path() {
             local base="$1"
@@ -1023,13 +1076,12 @@ jobs:
           fi
 
           PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
-          PHYSICAL_TAO_ROOT_DIR="$(realpath "$TAO_ROOT_DIR")"
 
           if [ ! -f "$EXPECTED_EXTENSION_DIR/manifest.php" ] && [ -f "$EXTENSION_DIR/manifest.php" ]; then
-            if [ "$PHYSICAL_EXTENSION_DIR" = "$PHYSICAL_TAO_ROOT_DIR" ]; then
-              # tao-core layout: extension root == TAO root. A non-extension tao/
-              # directory (e.g. Crowdin mirror) must not be replaced with a symlink.
-              echo "Extension '$TAO_EXTENSION_NAME' is the TAO root itself; skipping discovery symlink."
+            if [ "$IS_TAO_CORE" = "true" ]; then
+              # Confirmed tao-core: a non-extension tao/ directory (Crowdin mirror)
+              # must not be replaced with a discovery symlink.
+              echo "Confirmed tao-core package; skipping discovery symlink at $EXPECTED_EXTENSION_DIR."
               EXPECTED_EXTENSION_DIR="$EXTENSION_DIR"
             elif [ -e "$EXPECTED_EXTENSION_DIR" ] && [ ! -L "$EXPECTED_EXTENSION_DIR" ]; then
               echo "::error::$EXPECTED_EXTENSION_DIR exists but is not the extension root (missing manifest.php)."
@@ -1133,19 +1185,18 @@ jobs:
           fi
 
           # Grunt resolves the TAO dist root as ../../../ from views/build and expects
-          # extensions under <dist>/tao, <dist>/taoQtiItem, etc. For tao-core the
-          # checkout IS the extension, so expose it as <parent>/tao and install the
-          # runtime views dependencies that requirejs.build.json references.
+          # extensions under <dist>/tao, <dist>/taoQtiItem, etc. For confirmed tao-core
+          # the checkout IS the extension, so expose it as <parent>/tao.
           ensure_tao_core_grunt_layout() {
             local extension_dir="$1"
             local build_dir="$2"
             local dist_root tao_link
 
-            if [ -z "$build_dir" ]; then
+            if [ "${IS_TAO_CORE:-false}" != "true" ]; then
               return 0
             fi
 
-            if [ "$(realpath "$extension_dir")" != "$(realpath "$TAO_ROOT_DIR")" ]; then
+            if [ -z "$build_dir" ]; then
               return 0
             fi
 
