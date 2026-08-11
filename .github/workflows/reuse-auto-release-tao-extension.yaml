@@ -901,25 +901,28 @@ jobs:
               return 0
             fi
 
-            local package_name branch vcs_url
+            local package_name
             package_name="$(jq -r '.name // empty' "$root/composer.json")"
             if [ -z "$package_name" ]; then
               echo "::error::composer.json under $root is missing the package name."
               exit 1
             fi
 
-            branch="${RELEASE_REF:-${GITHUB_REF_NAME:-develop}}"
-            branch="${branch#refs/heads/}"
-            vcs_url="https://github.com/${package_name}.git"
-
-            echo "Generating composer-release.json for $package_name (branch: $branch) ..."
+            # Use a path repo against the checked-out tree so Composer does not
+            # clone the GitHub VCS remote and scan every tag/branch.
+            echo "Generating composer-release.json for $package_name (path: .) ..."
             jq \
-              --arg branch "$branch" \
               --arg pkg "$package_name" \
-              --arg vcs "$vcs_url" \
               '
-                .require[$pkg] = ("dev-" + $branch + " as v99.99.99") |
-                .repositories = ((.repositories // []) + [{"type": "vcs", "url": $vcs}]) |
+                .require[$pkg] = "99.99.99" |
+                .repositories = ((.repositories // []) + [{
+                  "type": "path",
+                  "url": ".",
+                  "options": {
+                    "symlink": false,
+                    "versions": {($pkg): "99.99.99"}
+                  }
+                }]) |
                 .config = (.config // {}) |
                 .config["allow-plugins"] = ((.config["allow-plugins"] // {}) + {"oat-sa/*": true}) |
                 del(.name) | del(.autoload)
