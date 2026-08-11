@@ -1460,8 +1460,7 @@ jobs:
           git config --global user.email "$BOT_USER_EMAIL"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
-          echo "**Release notes**" > /tmp/release_notes.md
-          echo "" >> /tmp/release_notes.md
+          > /tmp/release_notes.md
           if git rev-parse -q --verify "refs/tags/${LATEST_TAG}" >/dev/null; then
             echo "Full change list [here](https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${NEW_TAG})" >> /tmp/release_notes.md
             echo "" >> /tmp/release_notes.md
