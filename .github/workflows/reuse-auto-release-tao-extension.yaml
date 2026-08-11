@@ -692,12 +692,14 @@ jobs:
                 /*) EXTENSION_DIR="$TAO_EXTENSION_PATH" ;;
                 *) EXTENSION_DIR="$REPO_ROOT/${TAO_EXTENSION_PATH#./}" ;;
               esac
-            elif [ -d "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME" ]; then
+            elif [ -f "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME/manifest.php" ]; then
               EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             elif [ -f "$TAO_ROOT_DIR/manifest.php" ]; then
               EXTENSION_DIR="$TAO_ROOT_DIR"
             elif [ -f "$REPO_ROOT/manifest.php" ]; then
               EXTENSION_DIR="$REPO_ROOT"
+            elif [ -d "$TAO_ROOT_DIR/$TAO_EXTENSION_NAME" ]; then
+              EXTENSION_DIR="$TAO_ROOT_DIR/$TAO_EXTENSION_NAME"
             else
               EXTENSION_DIR="$REPO_ROOT"
             fi
@@ -850,8 +852,23 @@ jobs:
               return 0
             fi
 
-            if [ -d "$root/tao" ] || [ -d "$root/vendor" ]; then
+            # Prefer a real TAO core install (tao/manifest.php) over a non-extension
+            # tao/ directory (e.g. tao-core's Crowdin mirror at tao/locales).
+            if [ -f "$root/tao/manifest.php" ] || [ -d "$root/vendor" ]; then
               echo "PHP dependencies already installed under $root, skipping Composer install."
+              return 0
+            fi
+
+            cd "$root"
+
+            # tao-core layout: the repository root IS the tao extension. Install its
+            # composer.json directly instead of the self-require release wrapper, which
+            # would try to place oat-sa/tao-core under ./tao/ and conflict with tao/locales.
+            if [ -f "$root/manifest.php" ] && [ ! -f "$root/tao/manifest.php" ]; then
+              echo "Installing Composer dependencies for TAO core at repository root ..."
+              allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
+              composer install --no-interaction --prefer-dist --no-progress
+              git checkout -- composer.json 2>/dev/null || true
               return 0
             fi
 
@@ -882,7 +899,6 @@ jobs:
             echo "Composer file successfully generated:"
             cat "$root/composer-release.json"
 
-            cd "$root"
             export COMPOSER=composer-release.json
             allow_composer_plugins "$TAO_COMPOSER_ALLOW_PLUGINS"
             composer install --no-interaction --prefer-dist --no-progress
@@ -891,30 +907,45 @@ jobs:
             git checkout -- composer.json 2>/dev/null || true
           }
 
+          resolve_tao_core_stub_dir() {
+            local root="$1"
+            # When the TAO root itself is the tao extension (tao-core), write stubs into
+            # the root instead of under a non-extension tao/ directory.
+            if [ -f "$root/manifest.php" ] && [ ! -f "$root/tao/manifest.php" ]; then
+              printf '%s' "$root"
+            else
+              printf '%s' "$root/tao"
+            fi
+          }
+
           prepare_tao_locale_workspace() {
             local root="$1"
+            local tao_dir
             local messages_json='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations":{}}'
 
-            echo "Preparing TAO workspace for locale compilation ..."
+            tao_dir="$(resolve_tao_core_stub_dir "$root")"
+            echo "Preparing TAO workspace for locale compilation (tao stubs: $tao_dir) ..."
             cd "$root"
-            mkdir -p tao/views/locales/en-US/
+            mkdir -p "$tao_dir/views/locales/en-US/"
             mkdir -p config/
             touch index.php
-            echo "$messages_json" > tao/views/locales/en-US/messages.json
+            echo "$messages_json" > "$tao_dir/views/locales/en-US/messages.json"
           }
 
           prepare_tao_frontend_workspace() {
             local root="$1"
+            local tao_dir
             local messages_json='{"serial":"9","date":1615820392,"version":"3.3.0-9","translations":{}}'
 
-            echo "Preparing TAO workspace for frontend build ..."
+            tao_dir="$(resolve_tao_core_stub_dir "$root")"
+            echo "Preparing TAO workspace for frontend build (tao stubs: $tao_dir) ..."
             cd "$root"
             mkdir -p taoQtiItem/views/js/mathjax/
-            mkdir -p tao/views/locales/en-US/
+            mkdir -p "$tao_dir/views/locales/en-US/"
             mkdir -p config/
             touch taoQtiItem/views/js/mathjax/MathJax.js
             touch index.php
-            echo "$messages_json" > tao/views/locales/en-US/messages.json
+            echo "$messages_json" > "$tao_dir/views/locales/en-US/messages.json"
           }
 
           prepare_tao_workspace() {
@@ -991,18 +1022,24 @@ jobs:
             echo "::warning::No manifest.php found for extension '$TAO_EXTENSION_NAME' under $EXTENSION_DIR."
           fi
 
+          PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
+          PHYSICAL_TAO_ROOT_DIR="$(realpath "$TAO_ROOT_DIR")"
+
           if [ ! -f "$EXPECTED_EXTENSION_DIR/manifest.php" ] && [ -f "$EXTENSION_DIR/manifest.php" ]; then
-            if [ -e "$EXPECTED_EXTENSION_DIR" ] && [ ! -L "$EXPECTED_EXTENSION_DIR" ]; then
+            if [ "$PHYSICAL_EXTENSION_DIR" = "$PHYSICAL_TAO_ROOT_DIR" ]; then
+              # tao-core layout: extension root == TAO root. A non-extension tao/
+              # directory (e.g. Crowdin mirror) must not be replaced with a symlink.
+              echo "Extension '$TAO_EXTENSION_NAME' is the TAO root itself; skipping discovery symlink."
+              EXPECTED_EXTENSION_DIR="$EXTENSION_DIR"
+            elif [ -e "$EXPECTED_EXTENSION_DIR" ] && [ ! -L "$EXPECTED_EXTENSION_DIR" ]; then
               echo "::error::$EXPECTED_EXTENSION_DIR exists but is not the extension root (missing manifest.php)."
               exit 1
+            else
+              EXTENSION_LINK_TARGET="$(realpath --relative-to="$TAO_ROOT_DIR" "$EXTENSION_DIR")"
+              echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
+              ln -sfn "$EXTENSION_LINK_TARGET" "$EXPECTED_EXTENSION_DIR"
             fi
-
-            EXTENSION_LINK_TARGET="$(realpath --relative-to="$TAO_ROOT_DIR" "$EXTENSION_DIR")"
-            echo "Linking extension for TAO discovery: $EXPECTED_EXTENSION_DIR -> $EXTENSION_LINK_TARGET"
-            ln -sfn "$EXTENSION_LINK_TARGET" "$EXPECTED_EXTENSION_DIR"
           fi
-
-          PHYSICAL_EXTENSION_DIR="$(realpath "$EXTENSION_DIR")"
 
           echo "TAO root path: $TAO_ROOT_DIR"
           echo "TAO extension path: $EXTENSION_DIR"
@@ -1072,17 +1109,21 @@ jobs:
               *) BUILD_WORKDIR="$TAO_ROOT_DIR/${BUILD_WORKDIR#./}" ;;
             esac
 
-            if [ ! -d "$BUILD_WORKDIR" ] && [ -d "$TAO_ROOT_DIR/tao/views/build" ]; then
+            # Prefer the extension's own views/build (tao-core) when the default
+            # tao/views/build path is missing or is not a real TAO core install.
+            if { [ ! -d "$BUILD_WORKDIR" ] || [ ! -f "$BUILD_WORKDIR/package.json" ]; } \
+              && [ -f "$PHYSICAL_EXTENSION_DIR/views/build/package.json" ]; then
+              BUILD_WORKDIR="$PHYSICAL_EXTENSION_DIR/views/build"
+            fi
+
+            if { [ ! -d "$BUILD_WORKDIR" ] || [ ! -f "$BUILD_WORKDIR/package.json" ]; } \
+              && [ -f "$TAO_ROOT_DIR/tao/views/build/package.json" ]; then
               BUILD_WORKDIR="$TAO_ROOT_DIR/tao/views/build"
             fi
 
             if [ ! -d "$BUILD_WORKDIR" ]; then
               echo "::error::Resolved TAO build workdir does not exist: $BUILD_WORKDIR. Ensure composer install completed successfully and TAO core is available."
               exit 1
-            fi
-
-            if [ ! -f "$BUILD_WORKDIR/package.json" ] && [ -f "$TAO_ROOT_DIR/tao/views/build/package.json" ]; then
-              BUILD_WORKDIR="$TAO_ROOT_DIR/tao/views/build"
             fi
 
             if [ ! -f "$BUILD_WORKDIR/package.json" ]; then
@@ -1164,17 +1205,33 @@ jobs:
           cat "$LOCALES_FILE"
 
           cd "$TAO_ROOT_DIR"
+
+          TRANSLATE_SCRIPT=""
+          if [ -f "$PHYSICAL_EXTENSION_DIR/scripts/taoTranslate.php" ]; then
+            TRANSLATE_SCRIPT="$PHYSICAL_EXTENSION_DIR/scripts/taoTranslate.php"
+          elif [ -f "$TAO_ROOT_DIR/tao/scripts/taoTranslate.php" ]; then
+            TRANSLATE_SCRIPT="$TAO_ROOT_DIR/tao/scripts/taoTranslate.php"
+          elif [ -f "$TAO_ROOT_DIR/scripts/taoTranslate.php" ]; then
+            TRANSLATE_SCRIPT="$TAO_ROOT_DIR/scripts/taoTranslate.php"
+          else
+            echo "::error::taoTranslate.php was not found under the extension or TAO root. Ensure Composer install completed successfully."
+            exit 1
+          fi
+
           while read -r LOCALE || [ -n "$LOCALE" ]; do
             [ -z "$LOCALE" ] && continue
 
-            EXPECTED_PO="${TAO_ROOT_DIR}/${TAO_EXTENSION_NAME}/locales/${LOCALE}/messages.po"
+            EXPECTED_PO="${EXTENSION_DIR}/locales/${LOCALE}/messages.po"
+            if [ ! -f "$EXPECTED_PO" ] && [ -f "${EXPECTED_EXTENSION_DIR}/locales/${LOCALE}/messages.po" ]; then
+              EXPECTED_PO="${EXPECTED_EXTENSION_DIR}/locales/${LOCALE}/messages.po"
+            fi
             if [ ! -f "$EXPECTED_PO" ]; then
-              echo "::error::Expected PO file for locale '${LOCALE}' was not found at ${EXPECTED_PO}. Ensure the extension symlink under ${TAO_EXTENSION_NAME}/ points to the extension root."
+              echo "::error::Expected PO file for locale '${LOCALE}' was not found at ${EXTENSION_DIR}/locales/${LOCALE}/messages.po. Ensure the extension root is resolved correctly for ${TAO_EXTENSION_NAME}."
               exit 1
             fi
 
             echo "Running TAO locale compile command for locale ${LOCALE}"
-            TAO_TRANSLATE_STANDALONE=1 php tao/scripts/taoTranslate.php -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
+            TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
           done < "$LOCALES_FILE"
 
       - name: Commit generated release assets
