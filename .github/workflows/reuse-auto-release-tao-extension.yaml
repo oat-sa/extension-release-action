@@ -1350,6 +1350,48 @@ jobs:
             exit 1
           fi
 
+          if [ ! -f "$TAO_ROOT_DIR/vendor/autoload.php" ]; then
+            echo "::error::Composer autoload not found at $TAO_ROOT_DIR/vendor/autoload.php. Ensure Composer install completed successfully."
+            exit 1
+          fi
+
+          # Standalone taoTranslate defaults ROOT_PATH to dirname(extension, 2), which for
+          # tao-core (repo root == extension) points at the parent workspace without vendor/.
+          # Always pass -r so autoload resolves under TAO_ROOT_DIR.
+          #
+          # TaoTranslate also resolves locales as <scripts>/../../<extension>/locales. For
+          # tao-core that becomes $TAO_ROOT_DIR/tao/locales, so expose the checkout there.
+          TAO_LOCALE_DISCOVERY_LINK=""
+          TAO_LOCALE_DISCOVERY_BACKUP=""
+          cleanup_tao_core_locale_discovery() {
+            if [ -z "${TAO_LOCALE_DISCOVERY_LINK:-}" ]; then
+              return 0
+            fi
+            if [ -L "$TAO_LOCALE_DISCOVERY_LINK" ]; then
+              rm -f "$TAO_LOCALE_DISCOVERY_LINK"
+            fi
+            if [ -n "${TAO_LOCALE_DISCOVERY_BACKUP:-}" ] && [ -e "$TAO_LOCALE_DISCOVERY_BACKUP" ]; then
+              mv "$TAO_LOCALE_DISCOVERY_BACKUP" "$TAO_LOCALE_DISCOVERY_LINK"
+            fi
+          }
+          trap cleanup_tao_core_locale_discovery EXIT
+
+          if [ "${IS_TAO_CORE:-}" = "true" ]; then
+            TAO_LOCALE_DISCOVERY_LINK="$TAO_ROOT_DIR/${TAO_EXTENSION_NAME}"
+            if [ -L "$TAO_LOCALE_DISCOVERY_LINK" ]; then
+              ln -sfn . "$TAO_LOCALE_DISCOVERY_LINK"
+              echo "Updated tao-core locale discovery symlink: $TAO_LOCALE_DISCOVERY_LINK -> ."
+            elif [ -e "$TAO_LOCALE_DISCOVERY_LINK" ]; then
+              TAO_LOCALE_DISCOVERY_BACKUP="${TAO_LOCALE_DISCOVERY_LINK}.release-bak.$$"
+              echo "Temporarily moving $TAO_LOCALE_DISCOVERY_LINK aside for locale compile."
+              mv "$TAO_LOCALE_DISCOVERY_LINK" "$TAO_LOCALE_DISCOVERY_BACKUP"
+              ln -sfn . "$TAO_LOCALE_DISCOVERY_LINK"
+            else
+              ln -sfn . "$TAO_LOCALE_DISCOVERY_LINK"
+              echo "Linked tao-core locale discovery path: $TAO_LOCALE_DISCOVERY_LINK -> ."
+            fi
+          fi
+
           while read -r LOCALE || [ -n "$LOCALE" ]; do
             [ -z "$LOCALE" ] && continue
 
@@ -1363,7 +1405,7 @@ jobs:
             fi
 
             echo "Running TAO locale compile command for locale ${LOCALE}"
-            TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
+            TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -r "$TAO_ROOT_DIR" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
           done < "$LOCALES_FILE"
 
       - name: Commit generated release assets
