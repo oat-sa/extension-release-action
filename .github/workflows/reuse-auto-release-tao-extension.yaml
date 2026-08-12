@@ -1291,20 +1291,21 @@ jobs:
             )
           fi
 
-          if [ -n "$JS_COMMAND" ]; then
-            echo "Running TAO JS bundle command: $JS_COMMAND"
-            cd "$BUILD_WORKDIR"
-            eval "$JS_COMMAND"
-          else
-            echo "Skipping TAO JS bundle step: no explicit command provided and $BUNDLE_TASK_FILE was not found."
-          fi
-
+          # CSS must run before JS (sequential). Some JS bundles depend on compiled CSS.
           if [ -n "$CSS_COMMAND" ]; then
             echo "Running TAO CSS/SASS command: $CSS_COMMAND"
             cd "$BUILD_WORKDIR"
             eval "$CSS_COMMAND"
           else
             echo "Skipping TAO CSS/SASS step: no explicit command provided and $SASS_TASK_FILE was not found."
+          fi
+
+          if [ -n "$JS_COMMAND" ]; then
+            echo "Running TAO JS bundle command: $JS_COMMAND"
+            cd "$BUILD_WORKDIR"
+            eval "$JS_COMMAND"
+          else
+            echo "Skipping TAO JS bundle step: no explicit command provided and $BUNDLE_TASK_FILE was not found."
           fi
 
       - name: Compile translation JS bundles
