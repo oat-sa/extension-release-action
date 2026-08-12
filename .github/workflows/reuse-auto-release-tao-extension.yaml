@@ -49,7 +49,7 @@ on:
         type: string
         default: ''
       TAO_BUILD_FE:
-        description: 'Frontend bundle build mode. auto: build only when frontend source files changed; yes/true: always build; no/false: never build.'
+        description: 'Frontend bundle build mode. auto: build only when frontend source files changed; yes/true: always build and allow a release even with no new commits since the last tag; no/false: never build.'
         required: false
         type: string
         default: 'auto'
@@ -359,6 +359,7 @@ jobs:
         env:
           VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
           RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+          TAO_BUILD_FE: ${{ inputs.TAO_BUILD_FE }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
@@ -368,6 +369,12 @@ jobs:
           > /tmp/commit_hashes.txt
           > /tmp/commit_subjects.txt
           HAS_BREAKING_CHANGE=false
+
+          FORCE_FE_BUILD=false
+          TAO_BUILD_FE_NORM="$(printf '%s' "${TAO_BUILD_FE:-auto}" | tr '[:upper:]' '[:lower:]')"
+          case "$TAO_BUILD_FE_NORM" in
+            yes|true) FORCE_FE_BUILD=true ;;
+          esac
 
           is_breaking_change() {
             local subject="$1"
@@ -445,6 +452,8 @@ jobs:
           if [ ! -s /tmp/commit_hashes.txt ]; then
             if [ -n "$RELEASE_VERSION" ]; then
               echo "No release-worthy commits found since last tag, but RELEASE_VERSION is set. Continuing manual release."
+            elif [ "$FORCE_FE_BUILD" = "true" ]; then
+              echo "No release-worthy commits found since last tag, but TAO_BUILD_FE=${TAO_BUILD_FE_NORM}. Continuing release to rebuild frontend bundles."
             else
               echo "No release-worthy commits found since last tag. Skipping release."
               echo "SKIP_RELEASE=true" >> $GITHUB_ENV
@@ -1179,6 +1188,17 @@ jobs:
             CSS_COMMAND="npx grunt ${EXTENSION_NAME_LOWER}sass"
           fi
 
+          # Every frontend build must rebuild both asset types. Never allow a partial
+          # build that could release stale CSS or JS.
+          if [ -z "$CSS_COMMAND" ]; then
+            echo "::error::Frontend build requested, but no CSS/SASS command could be resolved. Set TAO_CSS_BUNDLE_COMMAND or ensure $SASS_TASK_FILE exists."
+            exit 1
+          fi
+          if [ -z "$JS_COMMAND" ]; then
+            echo "::error::Frontend build requested, but no JS bundle command could be resolved. Set TAO_JS_BUNDLE_COMMAND or ensure $BUNDLE_TASK_FILE exists."
+            exit 1
+          fi
+
           if [ -n "$TAO_BUILD_SETUP_COMMAND" ] || [ -n "$JS_COMMAND" ] || [ -n "$CSS_COMMAND" ]; then
             BUILD_WORKDIR="$TAO_BUILD_WORKDIR"
             if [ -z "$BUILD_WORKDIR" ]; then
@@ -1504,10 +1524,19 @@ jobs:
           UNTRACKED_ASSETS="$(git ls-files --others --exclude-standard -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null || true)"
           if git diff --quiet --ignore-submodules -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null \
             && [ -z "$UNTRACKED_ASSETS" ]; then
+            # Generated bundles kept out of git would silently produce an asset-less release.
+            IGNORED_ASSETS="$(git ls-files --others --ignored --exclude-standard -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null || true)"
+            if [ -n "$IGNORED_ASSETS" ]; then
+              echo "::warning::Generated files under ${ASSET_CHECK_PATHS[*]} are excluded by .gitignore, so they cannot be committed to the release:"
+              printf '%s\n' "$IGNORED_ASSETS" | head -n 20
+            fi
+
             if [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
               echo "::warning::Locale compilation completed, but no generated locale asset changes were detected under ${ASSET_CHECK_PATHS[*]}. Continuing release."
+            elif [ "$NEEDS_FE_BUILD" = "true" ]; then
+              echo "::warning::Frontend bundles were rebuilt, but they are identical to the committed ones under ${ASSET_CHECK_PATHS[*]}. The release will contain no new asset commit."
             else
-              echo "No generated release asset changes detected after TAO release preparation."
+              echo "No generated release asset changes detected after TAO release preparation. Continuing release."
             fi
             exit 0
           fi
@@ -1723,6 +1752,7 @@ jobs:
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
           NEW_TAG: ${{ needs.plan.outputs.new_tag }}
           RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+          NEEDS_FE_BUILD: ${{ needs.plan.outputs.needs_fe_build }}
           DEV_BRANCH: ${{ inputs.BACKPORT && inputs.RELEASE_REF || inputs.DEV_BRANCH }}
           MAIN_BRANCH: ${{ inputs.MAIN_BRANCH }}
           SKIP_MERGE_BACK: ${{ inputs.SKIP_MERGE_BACK || inputs.BACKPORT }}
@@ -1804,8 +1834,12 @@ jobs:
 
           git fetch origin "$TARGET_BRANCH" "$RELEASE_BRANCH"
           COMMIT_COUNT=$(git rev-list --count "origin/${TARGET_BRANCH}..origin/${RELEASE_BRANCH}")
-          if [ "$COMMIT_COUNT" -eq 0 ] && [ -n "$RELEASE_VERSION" ]; then
-            echo "Manual release (${NEW_TAG}): no commits between ${TARGET_BRANCH} and ${RELEASE_BRANCH}. Skipping pull request."
+          if [ "$COMMIT_COUNT" -eq 0 ] && { [ -n "$RELEASE_VERSION" ] || [ "$NEEDS_FE_BUILD" = "true" ]; }; then
+            if [ -n "$RELEASE_VERSION" ]; then
+              echo "Manual release (${NEW_TAG}): no commits between ${TARGET_BRANCH} and ${RELEASE_BRANCH}. Skipping pull request."
+            else
+              echo "Forced frontend rebuild release (${NEW_TAG}): no commits between ${TARGET_BRANCH} and ${RELEASE_BRANCH}. Skipping pull request."
+            fi
             finalize_release_on_branch "$TARGET_BRANCH"
 
             if [ "$TARGET_BRANCH" = "$MAIN_BRANCH" ] && [ "$DEV_BRANCH" != "$MAIN_BRANCH" ]; then
