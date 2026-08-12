@@ -1524,11 +1524,14 @@ jobs:
           UNTRACKED_ASSETS="$(git ls-files --others --exclude-standard -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null || true)"
           if git diff --quiet --ignore-submodules -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null \
             && [ -z "$UNTRACKED_ASSETS" ]; then
-            # Generated bundles kept out of git would silently produce an asset-less release.
-            IGNORED_ASSETS="$(git ls-files --others --ignored --exclude-standard -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null || true)"
+            # Generated bundles kept out of git would silently produce an asset-less
+            # release. Build dependencies are ignored on purpose, so exclude them.
+            IGNORED_ASSETS="$(git ls-files --others --ignored --exclude-standard -- "${ASSET_CHECK_PATHS[@]}" 2>/dev/null \
+              | grep -Ev '(^|/)(node_modules|\.sass-cache)/' \
+              | head -n 20 || true)"
             if [ -n "$IGNORED_ASSETS" ]; then
               echo "::warning::Generated files under ${ASSET_CHECK_PATHS[*]} are excluded by .gitignore, so they cannot be committed to the release:"
-              printf '%s\n' "$IGNORED_ASSETS" | head -n 20
+              printf '%s\n' "$IGNORED_ASSETS"
             fi
 
             if [ "$NEEDS_LOCALE_COMPILE" = "true" ]; then
