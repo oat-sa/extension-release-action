@@ -1380,8 +1380,10 @@ jobs:
           # tao-core (repo root == extension) points at the parent workspace without vendor/.
           # Always pass -r so autoload resolves under TAO_ROOT_DIR.
           #
-          # TaoTranslate also resolves locales as <scripts>/../../<extension>/locales. For
-          # tao-core that becomes $TAO_ROOT_DIR/tao/locales, so expose the checkout there.
+          # TaoTranslate resolves locales as dirname(__FILE__)/../../<extension>/locales.
+          # For tao-core the script is $TAO_ROOT_DIR/scripts/taoTranslate.php, so that path
+          # is dirname($TAO_ROOT_DIR)/<extension>/locales — not $TAO_ROOT_DIR/<extension>.
+          # Expose the checkout at the path PHP actually opens.
           TAO_LOCALE_DISCOVERY_LINK=""
           TAO_LOCALE_DISCOVERY_BACKUP=""
           cleanup_tao_core_locale_discovery() {
@@ -1398,18 +1400,31 @@ jobs:
           trap cleanup_tao_core_locale_discovery EXIT
 
           if [ "${IS_TAO_CORE:-}" = "true" ]; then
-            TAO_LOCALE_DISCOVERY_LINK="$TAO_ROOT_DIR/${TAO_EXTENSION_NAME}"
+            if [ -z "$TAO_EXTENSION_NAME" ] || [ "$TAO_EXTENSION_NAME" = "." ] || [ "$TAO_EXTENSION_NAME" = ".." ]; then
+              echo "::error::Refusing to create tao-core locale discovery path with invalid TAO_EXTENSION_NAME='$TAO_EXTENSION_NAME'."
+              exit 1
+            fi
+
+            TAO_LOCALE_DISCOVERY_LINK="$(dirname "$TAO_ROOT_DIR")/${TAO_EXTENSION_NAME}"
+            TAO_LOCALE_DISCOVERY_TARGET="$(realpath "$TAO_ROOT_DIR")"
+
             if [ -L "$TAO_LOCALE_DISCOVERY_LINK" ]; then
-              ln -sfn . "$TAO_LOCALE_DISCOVERY_LINK"
-              echo "Updated tao-core locale discovery symlink: $TAO_LOCALE_DISCOVERY_LINK -> ."
+              ln -sfn "$TAO_LOCALE_DISCOVERY_TARGET" "$TAO_LOCALE_DISCOVERY_LINK"
+              echo "Updated tao-core locale discovery symlink: $TAO_LOCALE_DISCOVERY_LINK -> $TAO_LOCALE_DISCOVERY_TARGET"
             elif [ -e "$TAO_LOCALE_DISCOVERY_LINK" ]; then
-              TAO_LOCALE_DISCOVERY_BACKUP="${TAO_LOCALE_DISCOVERY_LINK}.release-bak.$$"
-              echo "Temporarily moving $TAO_LOCALE_DISCOVERY_LINK aside for locale compile."
-              mv "$TAO_LOCALE_DISCOVERY_LINK" "$TAO_LOCALE_DISCOVERY_BACKUP"
-              ln -sfn . "$TAO_LOCALE_DISCOVERY_LINK"
+              if [ "$(realpath "$TAO_LOCALE_DISCOVERY_LINK")" = "$TAO_LOCALE_DISCOVERY_TARGET" ]; then
+                echo "tao-core locale discovery path already resolves to checkout: $TAO_LOCALE_DISCOVERY_LINK"
+                TAO_LOCALE_DISCOVERY_LINK=""
+              else
+                TAO_LOCALE_DISCOVERY_BACKUP="${TAO_LOCALE_DISCOVERY_LINK}.release-bak.$$"
+                echo "Temporarily moving $TAO_LOCALE_DISCOVERY_LINK aside for locale compile."
+                mv "$TAO_LOCALE_DISCOVERY_LINK" "$TAO_LOCALE_DISCOVERY_BACKUP"
+                ln -sfn "$TAO_LOCALE_DISCOVERY_TARGET" "$TAO_LOCALE_DISCOVERY_LINK"
+                echo "Linked tao-core locale discovery path: $TAO_LOCALE_DISCOVERY_LINK -> $TAO_LOCALE_DISCOVERY_TARGET"
+              fi
             else
-              ln -sfn . "$TAO_LOCALE_DISCOVERY_LINK"
-              echo "Linked tao-core locale discovery path: $TAO_LOCALE_DISCOVERY_LINK -> ."
+              ln -sfn "$TAO_LOCALE_DISCOVERY_TARGET" "$TAO_LOCALE_DISCOVERY_LINK"
+              echo "Linked tao-core locale discovery path: $TAO_LOCALE_DISCOVERY_LINK -> $TAO_LOCALE_DISCOVERY_TARGET"
             fi
           fi
 
@@ -1425,8 +1440,23 @@ jobs:
               exit 1
             fi
 
+            EXPECTED_JS="$(dirname "$EXPECTED_PO")/messages_po.js"
             echo "Running TAO locale compile command for locale ${LOCALE}"
-            TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -r "$TAO_ROOT_DIR" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}"
+            COMPILE_LOG="$(mktemp)"
+            if ! TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -r "$TAO_ROOT_DIR" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}" >"$COMPILE_LOG" 2>&1; then
+              cat "$COMPILE_LOG"
+              echo "::error::taoTranslate compile failed for locale '${LOCALE}' (non-zero exit)."
+              exit 1
+            fi
+            cat "$COMPILE_LOG"
+            if grep -qi 'cannot be read' "$COMPILE_LOG"; then
+              echo "::error::taoTranslate could not read PO for locale '${LOCALE}' at ${EXPECTED_PO}."
+              exit 1
+            fi
+            if [ ! -f "$EXPECTED_JS" ]; then
+              echo "::error::Expected compiled locale asset was not written: ${EXPECTED_JS}"
+              exit 1
+            fi
           done < "$LOCALES_FILE"
 
       - name: Commit generated release assets
