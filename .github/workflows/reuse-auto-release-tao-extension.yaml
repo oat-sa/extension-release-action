@@ -1179,6 +1179,8 @@ jobs:
           BUILD_WORKDIR=""
           JS_COMMAND="$TAO_JS_BUNDLE_COMMAND"
           CSS_COMMAND="$TAO_CSS_BUNDLE_COMMAND"
+          JS_TASK_AVAILABLE=false
+          CSS_TASK_AVAILABLE=false
 
           if [ -z "$JS_COMMAND" ] && [ -f "$BUNDLE_TASK_FILE" ]; then
             JS_COMMAND="npx grunt ${EXTENSION_NAME_LOWER}bundle"
@@ -1188,14 +1190,17 @@ jobs:
             CSS_COMMAND="npx grunt ${EXTENSION_NAME_LOWER}sass"
           fi
 
-          # Every frontend build must rebuild both asset types. Never allow a partial
-          # build that could release stale CSS or JS.
-          if [ -z "$CSS_COMMAND" ]; then
-            echo "::error::Frontend build requested, but no CSS/SASS command could be resolved. Set TAO_CSS_BUNDLE_COMMAND or ensure $SASS_TASK_FILE exists."
-            exit 1
+          if [ -n "$JS_COMMAND" ]; then
+            JS_TASK_AVAILABLE=true
           fi
-          if [ -z "$JS_COMMAND" ]; then
-            echo "::error::Frontend build requested, but no JS bundle command could be resolved. Set TAO_JS_BUNDLE_COMMAND or ensure $BUNDLE_TASK_FILE exists."
+          if [ -n "$CSS_COMMAND" ]; then
+            CSS_TASK_AVAILABLE=true
+          fi
+
+          # Rebuild every asset type that the extension actually exposes. Some
+          # legacy extensions only ship a JS bundle task and no sass task.
+          if [ "$JS_TASK_AVAILABLE" != "true" ] && [ "$CSS_TASK_AVAILABLE" != "true" ]; then
+            echo "::error::Frontend build requested, but no frontend build command could be resolved. Set TAO_JS_BUNDLE_COMMAND and/or TAO_CSS_BUNDLE_COMMAND, or ensure $BUNDLE_TASK_FILE and/or $SASS_TASK_FILE exist."
             exit 1
           fi
 
@@ -1311,13 +1316,13 @@ jobs:
             )
           fi
 
-          # CSS must run before JS (sequential). Some JS bundles depend on compiled CSS.
+          # CSS must run before JS when both exist. Some JS bundles depend on compiled CSS.
           if [ -n "$CSS_COMMAND" ]; then
             echo "Running TAO CSS/SASS command: $CSS_COMMAND"
             cd "$BUILD_WORKDIR"
             eval "$CSS_COMMAND"
           else
-            echo "Skipping TAO CSS/SASS step: no explicit command provided and $SASS_TASK_FILE was not found."
+            echo "Skipping TAO CSS/SASS step: no explicit command provided and no sass task was detected for this extension."
           fi
 
           if [ -n "$JS_COMMAND" ]; then
@@ -1325,7 +1330,7 @@ jobs:
             cd "$BUILD_WORKDIR"
             eval "$JS_COMMAND"
           else
-            echo "Skipping TAO JS bundle step: no explicit command provided and $BUNDLE_TASK_FILE was not found."
+            echo "Skipping TAO JS bundle step: no explicit command provided and no JS bundle task was detected for this extension."
           fi
 
       - name: Compile translation JS bundles
