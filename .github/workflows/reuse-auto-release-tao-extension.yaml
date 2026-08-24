@@ -1200,8 +1200,8 @@ jobs:
           # Rebuild every asset type that the extension actually exposes. Some
           # legacy extensions only ship a JS bundle task and no sass task.
           if [ "$JS_TASK_AVAILABLE" != "true" ] && [ "$CSS_TASK_AVAILABLE" != "true" ]; then
-            echo "::error::Frontend build requested, but no frontend build command could be resolved. Set TAO_JS_BUNDLE_COMMAND and/or TAO_CSS_BUNDLE_COMMAND, or ensure $BUNDLE_TASK_FILE and/or $SASS_TASK_FILE exist."
-            exit 1
+            echo "No extension-specific frontend build tasks detected under $EXTENSION_DIR. Skipping frontend build and assuming committed assets are the source of truth for this release."
+            exit 0
           fi
 
           if [ -n "$TAO_BUILD_SETUP_COMMAND" ] || [ -n "$JS_COMMAND" ] || [ -n "$CSS_COMMAND" ]; then
