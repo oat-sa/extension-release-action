@@ -1441,13 +1441,14 @@ jobs:
             # taoTranslate. translate_start.php does not define it, and this only bites
             # when the checkout itself is the root extension (tao-core). Keep the stub
             # gated so non-core extension releases are unchanged.
+            # Use printf (not a heredoc) so YAML indentation stays valid.
             TAO_CORE_TRANSLATE_PREPEND="$(mktemp)"
-            cat > "$TAO_CORE_TRANSLATE_PREPEND" <<'PHP'
-<?php
-if (!defined('ROOT_URL')) {
-    define('ROOT_URL', 'http://localhost/');
-}
-PHP
+            printf '%s\n' \
+              '<?php' \
+              "if (!defined('ROOT_URL')) {" \
+              "    define('ROOT_URL', 'http://localhost/');" \
+              '}' \
+              > "$TAO_CORE_TRANSLATE_PREPEND"
             PHP_TRANSLATE_ARGS=(-d "auto_prepend_file=${TAO_CORE_TRANSLATE_PREPEND}")
             echo "Defined tao-core standalone ROOT_URL stub for locale compile."
           fi
