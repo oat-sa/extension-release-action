@@ -1391,7 +1391,12 @@ jobs:
           # Expose the checkout at the path PHP actually opens.
           TAO_LOCALE_DISCOVERY_LINK=""
           TAO_LOCALE_DISCOVERY_BACKUP=""
+          TAO_CORE_TRANSLATE_PREPEND=""
+          PHP_TRANSLATE_ARGS=()
           cleanup_tao_core_locale_discovery() {
+            if [ -n "${TAO_CORE_TRANSLATE_PREPEND:-}" ] && [ -f "$TAO_CORE_TRANSLATE_PREPEND" ]; then
+              rm -f "$TAO_CORE_TRANSLATE_PREPEND"
+            fi
             if [ -z "${TAO_LOCALE_DISCOVERY_LINK:-}" ]; then
               return 0
             fi
@@ -1431,6 +1436,20 @@ jobs:
               ln -sfn "$TAO_LOCALE_DISCOVERY_TARGET" "$TAO_LOCALE_DISCOVERY_LINK"
               echo "Linked tao-core locale discovery path: $TAO_LOCALE_DISCOVERY_LINK -> $TAO_LOCALE_DISCOVERY_TARGET"
             fi
+
+            # tao-core manifest.php evaluates ROOT_URL while being required by standalone
+            # taoTranslate. translate_start.php does not define it, and this only bites
+            # when the checkout itself is the root extension (tao-core). Keep the stub
+            # gated so non-core extension releases are unchanged.
+            TAO_CORE_TRANSLATE_PREPEND="$(mktemp)"
+            cat > "$TAO_CORE_TRANSLATE_PREPEND" <<'PHP'
+<?php
+if (!defined('ROOT_URL')) {
+    define('ROOT_URL', 'http://localhost/');
+}
+PHP
+            PHP_TRANSLATE_ARGS=(-d "auto_prepend_file=${TAO_CORE_TRANSLATE_PREPEND}")
+            echo "Defined tao-core standalone ROOT_URL stub for locale compile."
           fi
 
           while read -r LOCALE || [ -n "$LOCALE" ]; do
@@ -1448,7 +1467,7 @@ jobs:
             EXPECTED_JS="$(dirname "$EXPECTED_PO")/messages_po.js"
             echo "Running TAO locale compile command for locale ${LOCALE}"
             COMPILE_LOG="$(mktemp)"
-            if ! TAO_TRANSLATE_STANDALONE=1 php "$TRANSLATE_SCRIPT" -r "$TAO_ROOT_DIR" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}" >"$COMPILE_LOG" 2>&1; then
+            if ! TAO_TRANSLATE_STANDALONE=1 php "${PHP_TRANSLATE_ARGS[@]}" "$TRANSLATE_SCRIPT" -r "$TAO_ROOT_DIR" -a compile -e "${TAO_EXTENSION_NAME}" -l="${LOCALE}" >"$COMPILE_LOG" 2>&1; then
               cat "$COMPILE_LOG"
               echo "::error::taoTranslate compile failed for locale '${LOCALE}' (non-zero exit)."
               exit 1
