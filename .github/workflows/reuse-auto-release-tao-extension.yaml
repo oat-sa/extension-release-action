@@ -44,7 +44,7 @@ on:
         type: string
         default: 'v'
       RELEASE_VERSION:
-        description: 'Explicit release version (e.g. 1.2.3 or 1.2.3.4, with or without VERSION_PREFIX). Required for backports when you need a specific tag. Skips semver auto-bump and allows release even without new commits since the last tag.'
+        description: 'Explicit release version (e.g. 1.2.3, 1.2.3.4, or 1.2.3.4-patch2, with or without VERSION_PREFIX). Required for backports when you need a specific tag. Skips semver auto-bump and allows release even without new commits since the last tag.'
         required: false
         type: string
         default: ''
@@ -69,7 +69,7 @@ on:
         type: boolean
         default: false
       BASE_TAG:
-        description: 'Optional tag baseline for backports on older release branches (e.g. v1.2.3 or v1.2.3.4). When set without BACKPORT, bumps the 3rd segment (v1.2.3 -> v1.2.4).'
+        description: 'Optional tag baseline for backports on older release branches (e.g. v1.2.3, v1.2.3.4, or v1.2.3.4-patch1). When set without BACKPORT, bumps the 3rd segment (v1.2.3 -> v1.2.4).'
         required: false
         type: string
         default: ''
@@ -212,12 +212,12 @@ jobs:
           set -euo pipefail
 
           if [ -z "$RELEASE_VERSION" ]; then
-            echo "::error::BACKPORT requires RELEASE_VERSION (e.g. 0.1.9.2 — not a branch name)."
+            echo "::error::BACKPORT requires RELEASE_VERSION (e.g. 0.1.9.2 or 0.1.9.2-patch2 — not a branch name)."
             exit 1
           fi
 
           if echo "$RELEASE_VERSION" | grep -q '/'; then
-            echo "::error::RELEASE_VERSION must be a version number (e.g. 0.1.9.2), not a branch name ('${RELEASE_VERSION}')."
+            echo "::error::RELEASE_VERSION must be a version number (e.g. 0.1.9.2 or 0.1.9.2-patch2), not a branch name ('${RELEASE_VERSION}')."
             exit 1
           fi
 
@@ -258,9 +258,9 @@ jobs:
           TAG_DISCOVERY_SCOPE: ${{ inputs.BACKPORT && inputs.BASE_TAG == '' && 'reachable' || inputs.TAG_DISCOVERY_SCOPE }}
         run: |
           if [ -n "$VERSION_PREFIX" ]; then
-            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}$"
+            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}(-patch[0-9]+)?$"
           else
-            PATTERN="^[0-9]+(\.[0-9]+){2,3}$"
+            PATTERN="^[0-9]+(\.[0-9]+){2,3}(-patch[0-9]+)?$"
           fi
 
           normalize_target_tag() {
@@ -480,9 +480,9 @@ jobs:
           LATEST_TAG="${{ env.LATEST_TAG }}"
 
           if [ -n "$VERSION_PREFIX" ]; then
-            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}$"
+            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}(-patch[0-9]+)?$"
           else
-            PATTERN="^[0-9]+(\.[0-9]+){2,3}$"
+            PATTERN="^[0-9]+(\.[0-9]+){2,3}(-patch[0-9]+)?$"
           fi
 
           if [ -n "$RELEASE_VERSION" ]; then
