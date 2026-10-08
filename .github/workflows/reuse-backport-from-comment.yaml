@@ -1,28 +1,19 @@
 # Reusable entrypoint: parse `/backport v1.2.3` from a PR comment and run reuse-backport-from-pr.
-# Runs the backport only when the comment is a valid `/backport <tag>` command and the PR is merged.
+# Runs only for a human user's single-line `/backport <tag>` on a merged pull request.
 #
-# Caller `backport.yml` (recommended):
-#   on:
-#     issue_comment:
-#       types: [created]
-#     pull_request:
-#       types: [closed]
-#       branches: [backport/**]
-#   permissions:
-#     contents: write
-#     pull-requests: write
-#   jobs:
-#     backport-from-comment:
-#       if: |
-#         github.event_name == 'issue_comment' &&
-#         github.event.issue.pull_request &&
-#         github.event.comment.user.type == 'User' &&
-#         contains(github.event.comment.body, '/backport')
-#       uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-comment.yaml@main
-#       with:
-#         COMMENT_BODY: ${{ github.event.comment.body }}
-#         SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
-#       secrets: inherit
+# Caller `backport.yml` — use this `if` so bots and unrelated comments never call this workflow:
+#   backport-from-comment:
+#     if: |
+#       github.event_name == 'issue_comment' &&
+#       github.event.issue.pull_request &&
+#       github.event.comment.user.type == 'User' &&
+#       startsWith(trim(github.event.comment.body), '/backport')
+#     uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-comment.yaml@main
+#     with:
+#       COMMENT_BODY: ${{ github.event.comment.body }}
+#       COMMENT_USER_TYPE: ${{ github.event.comment.user.type }}
+#       SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
+#     secrets: inherit
 #
 name: Backport from PR comment (Reusable)
 
@@ -30,7 +21,11 @@ on:
   workflow_call:
     inputs:
       COMMENT_BODY:
-        description: 'Comment body containing `/backport <tag>` (e.g. `/backport v1.2.3`).'
+        description: 'Comment body; must be a `/backport <tag>` command (see gate validation).'
+        required: true
+        type: string
+      COMMENT_USER_TYPE:
+        description: 'Pass github.event.comment.user.type from the caller (must be User).'
         required: true
         type: string
       SOURCE_PR_NUMBER:
@@ -71,6 +66,7 @@ jobs:
         id: validate
         env:
           COMMENT_BODY: ${{ inputs.COMMENT_BODY }}
+          COMMENT_USER_TYPE: ${{ inputs.COMMENT_USER_TYPE }}
           SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
         run: |
@@ -82,13 +78,18 @@ jobs:
             exit 0
           }
 
-          BASE_TAG="$(printf '%s' "$COMMENT_BODY" | tr '\n' ' ' | sed -nE 's#.*(^|[^a-zA-Z0-9])/?backport[[:space:]]+([^[:space:]]+).*#\2#p' | head -n 1)"
-          if [ -z "$BASE_TAG" ]; then
-            skip "Comment is not a valid /backport <tag> command. Skipping."
+          if [ "$COMMENT_USER_TYPE" != "User" ]; then
+            skip "Backport commands must be posted by a human user (comment user.type=${COMMENT_USER_TYPE})."
           fi
 
-          if ! echo "$COMMENT_BODY" | tr '\n' ' ' | grep -qE '(^|[[:space:]])/?backport[[:space:]]+[^[:space:]]+'; then
-            skip "Comment does not match /backport <tag>. Skipping."
+          FIRST_LINE="$(printf '%s' "$COMMENT_BODY" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if ! echo "$FIRST_LINE" | grep -qE '^/backport[[:space:]]+[^[:space:]]+$'; then
+            skip "Comment must be a single-line /backport <tag> command (example: /backport v1.2.3)."
+          fi
+
+          BASE_TAG="$(echo "$FIRST_LINE" | sed -nE 's#^/backport[[:space:]]+([^[:space:]]+).*#\1#p')"
+          if [ -z "$BASE_TAG" ]; then
+            skip "Comment is not a valid /backport <tag> command. Skipping."
           fi
 
           if ! PR_JSON="$(gh pr view "$SOURCE_PR_NUMBER" --repo "${{ github.repository }}" --json state,mergedAt 2>&1)"; then
