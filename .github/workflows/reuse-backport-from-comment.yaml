@@ -1,0 +1,89 @@
+# Reusable backport via `/backport <tag>` — same contract as oat-sa/backport-action:
+# https://github.com/oat-sa/backport-action/blob/main/.github/workflows/backport-on-comment.yml
+#
+# Consumer stub (no `with:` — event context is forwarded automatically):
+#
+#   name: Backport trigger
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     backport:
+#       uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-comment.yaml@main
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#       secrets: inherit
+#
+name: Backport from PR comment (Reusable)
+
+on:
+  workflow_call:
+    inputs: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  gate:
+    name: Validate /backport on merged PR
+    runs-on: ubuntu-latest
+    if: |
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/backport ') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    outputs:
+      proceed: ${{ steps.validate.outputs.proceed }}
+      base_tag: ${{ steps.validate.outputs.base_tag }}
+    steps:
+      - name: Parse command and check pull request is merged
+        id: validate
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+
+          skip() {
+            echo "$1"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          BASE_TAG="$(printf '%s' "$COMMENT_BODY" | sed -n 's#^/backport[[:space:]]\+\([^[:space:]]\+\).*#\1#p')"
+          if [ -z "$BASE_TAG" ]; then
+            skip "Comment is not a valid /backport <tag> command. Skipping."
+          fi
+
+          if ! PR_JSON="$(gh pr view "$SOURCE_PR_NUMBER" --repo "${{ github.repository }}" --json state,mergedAt 2>&1)"; then
+            echo "::error::Could not load pull request #${SOURCE_PR_NUMBER}: ${PR_JSON}"
+            exit 1
+          fi
+
+          PR_STATE="$(printf '%s' "$PR_JSON" | jq -r '.state // empty')"
+          MERGED_AT="$(printf '%s' "$PR_JSON" | jq -r '.mergedAt // empty')"
+          IS_MERGED=false
+          if [ "$PR_STATE" = "MERGED" ]; then
+            IS_MERGED=true
+          elif [ -n "$MERGED_AT" ] && [ "$MERGED_AT" != "null" ]; then
+            IS_MERGED=true
+          fi
+          if [ "$IS_MERGED" != "true" ]; then
+            skip "Pull request #${SOURCE_PR_NUMBER} is not merged. Backport runs only after merge."
+          fi
+
+          echo "base_tag=${BASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "Backport approved for merged PR #${SOURCE_PR_NUMBER} onto ${BASE_TAG}"
+
+  backport:
+    name: Run backport
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    uses: ./.github/workflows/reuse-backport-from-pr.yaml
+    with:
+      SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
+      BASE_TAG: ${{ needs.gate.outputs.base_tag }}
+    secrets: inherit

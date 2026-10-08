@@ -2002,7 +2002,6 @@ jobs:
       - merge-back
     if: ${{ always() && inputs.ENABLED && inputs.SLACK_NOTIFICATION }}
     permissions:
-      actions: read
       contents: read
     env:
       REPO_NAME: ${{ github.repository }}
@@ -2042,7 +2041,6 @@ jobs:
           fi
 
           MAX_SECTION_LENGTH=2400
-          MAX_ERROR_LENGTH=1800
 
           if [ "$PLAN_RESULT" = "failure" ] || [ "$PUBLISH_RESULT" = "failure" ] || [ "$MERGE_BACK_RESULT" = "failure" ]; then
             RELEASE_RESULT="failure"
@@ -2065,10 +2063,14 @@ jobs:
             HEADER_TEXT="Release failed: ${REPO_NAME}"
             BODY="TAO extension \`${EXTENSION_NAME}\` release from \`${RELEASE_REF}\` failed."
 
-            FAILED_JOB=$(gh run view "$RUN_ID" --repo "$REPO_NAME" --json jobs -q \
-              '.jobs[] | select(.conclusion=="failure") | .name' 2>/dev/null | head -1 || true)
-            FAILED_STEP=$(gh run view "$RUN_ID" --repo "$REPO_NAME" --json jobs -q \
-              '.jobs[] | select(.conclusion=="failure") | .steps[] | select(.conclusion=="failure") | .name' 2>/dev/null | head -1 || true)
+            FAILED_JOB=""
+            if [ "$PLAN_RESULT" = "failure" ]; then
+              FAILED_JOB="Plan release"
+            elif [ "$PUBLISH_RESULT" = "failure" ]; then
+              FAILED_JOB="Release ${NEW_TAG:-publish}"
+            elif [ "$MERGE_BACK_RESULT" = "failure" ]; then
+              FAILED_JOB="Merge back"
+            fi
 
             append_line "*Extension:* \`${EXTENSION_NAME}\`"
             append_line "*Release ref:* \`${RELEASE_REF}\`"
@@ -2079,34 +2081,7 @@ jobs:
             if [ -n "$FAILED_JOB" ]; then
               append_line "*Failed job:* \`${FAILED_JOB}\`"
             fi
-            if [ -n "$FAILED_STEP" ]; then
-              append_line "*Failed step:* \`${FAILED_STEP}\`"
-            fi
-
-            ERROR_EXCERPT=""
-            if gh run view "$RUN_ID" --repo "$REPO_NAME" --log-failed > /tmp/release-failed.log 2>/dev/null; then
-              ERROR_EXCERPT=$(grep -iE '(::error::|^[[:space:]]*error:|fatal error|remote: error|remote rejected|GH00[0-9]|protected branch|failed to push|Process completed with exit code)' /tmp/release-failed.log \
-                | sed 's/\r$//' \
-                | awk '!seen[$0]++' \
-                | tail -20 || true)
-              if [ -z "$ERROR_EXCERPT" ]; then
-                ERROR_EXCERPT=$(tail -25 /tmp/release-failed.log | sed 's/\r$//' || true)
-              fi
-            fi
-
-            if [ "${#ERROR_EXCERPT}" -gt "$MAX_ERROR_LENGTH" ]; then
-              ERROR_EXCERPT="${ERROR_EXCERPT:0:$((MAX_ERROR_LENGTH - 3))}..."
-            fi
-
-            if [ -n "$ERROR_EXCERPT" ]; then
-              CODE_FENCE='```'
-              append_line "*Error details:*"
-              append_line "${CODE_FENCE}"
-              append_line "${ERROR_EXCERPT}"
-              append_line "${CODE_FENCE}"
-            else
-              append_line "Check the workflow logs for details."
-            fi
+            append_line "Check the workflow logs for details."
 
             PRIMARY_URL="$RUN_URL"
             SECONDARY_URL=""
