@@ -234,6 +234,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
           SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
           BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
           BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
         run: |
@@ -247,8 +249,9 @@ jobs:
           echo "TMP_BRANCH=${TMP_BRANCH}" >> "$GITHUB_ENV"
 
           find_existing_backport_pr() {
-            gh pr list --base "$BACKPORT_BRANCH" --state open --json number,headRefName \
-              --jq "map(select(.headRefName | startswith(\"tmp-backport-pr-${SOURCE_PR_NUMBER}-\"))) | .[0].number // empty"
+            gh pr list --repo "${{ github.repository }}" --base "$BACKPORT_BRANCH" --state open \
+              --json number,headRefName,headRepositoryOwner,headRepository \
+              --jq "map(select(.headRefName | startswith(\"tmp-backport-pr-${SOURCE_PR_NUMBER}-\")) | select(.headRepositoryOwner.login == \"${REPO_OWNER}\" and .headRepository.name == \"${REPO_NAME}\")) | .[0].number // empty"
           }
 
           EXISTING="$(find_existing_backport_pr)"
@@ -336,13 +339,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
           SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
 
           EXISTING="${{ steps.cherry_pick.outputs.existing_pr_number }}"
           if [ -z "$EXISTING" ]; then
-            EXISTING=$(gh pr list --base "$BACKPORT_BRANCH" --state open --json number,headRefName \
-              --jq "map(select(.headRefName | startswith(\"tmp-backport-pr-${SOURCE_PR_NUMBER}-\"))) | .[0].number // empty")
+            EXISTING=$(gh pr list --repo "${{ github.repository }}" --base "$BACKPORT_BRANCH" --state open \
+              --json number,headRefName,headRepositoryOwner,headRepository \
+              --jq "map(select(.headRefName | startswith(\"tmp-backport-pr-${SOURCE_PR_NUMBER}-\")) | select(.headRepositoryOwner.login == \"${REPO_OWNER}\" and .headRepository.name == \"${REPO_NAME}\")) | .[0].number // empty")
           fi
           if [ -n "$EXISTING" ]; then
             echo "Open backport PR already exists: #${EXISTING}"
