@@ -7,11 +7,13 @@
 #       github.event_name == 'issue_comment' &&
 #       github.event.issue.pull_request &&
 #       github.event.comment.user.type == 'User' &&
-#       startsWith(trim(github.event.comment.body), '/backport')
+#       !endsWith(github.event.comment.user.login, '[bot]') &&
+#       startsWith(github.event.comment.body, '/backport')
 #     uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-comment.yaml@main
 #     with:
 #       COMMENT_BODY: ${{ github.event.comment.body }}
 #       COMMENT_USER_TYPE: ${{ github.event.comment.user.type }}
+#       COMMENT_USER_LOGIN: ${{ github.event.comment.user.login }}
 #       SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
 #     secrets: inherit
 #
@@ -26,6 +28,10 @@ on:
         type: string
       COMMENT_USER_TYPE:
         description: 'Pass github.event.comment.user.type from the caller (must be User).'
+        required: true
+        type: string
+      COMMENT_USER_LOGIN:
+        description: 'Pass github.event.comment.user.login from the caller (used to ignore bots such as coderabbitai[bot]).'
         required: true
         type: string
       SOURCE_PR_NUMBER:
@@ -67,6 +73,7 @@ jobs:
         env:
           COMMENT_BODY: ${{ inputs.COMMENT_BODY }}
           COMMENT_USER_TYPE: ${{ inputs.COMMENT_USER_TYPE }}
+          COMMENT_USER_LOGIN: ${{ inputs.COMMENT_USER_LOGIN }}
           SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
         run: |
@@ -77,6 +84,22 @@ jobs:
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           }
+
+          is_ignored_bot_comment() {
+            case "$COMMENT_USER_LOGIN" in
+              coderabbitai[bot]|coderabbit[bot]|github-actions[bot]|*'[bot]')
+                return 0
+                ;;
+            esac
+            if [ "$COMMENT_USER_TYPE" = "Bot" ]; then
+              return 0
+            fi
+            return 1
+          }
+
+          if is_ignored_bot_comment; then
+            skip "Ignoring comment from bot ${COMMENT_USER_LOGIN}."
+          fi
 
           if [ "$COMMENT_USER_TYPE" != "User" ]; then
             skip "Backport commands must be posted by a human user (comment user.type=${COMMENT_USER_TYPE})."
