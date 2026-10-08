@@ -297,7 +297,7 @@ jobs:
           BODY="$(cat <<EOF
           :warning: **Automatic backport failed**
 
-          The \`/backport ${BASE_TAG}\` request could not be applied automatically (cherry-pick conflict).
+          The backport request for release line \`${BASE_TAG}\` could not be applied automatically (cherry-pick conflict).
 
           Please create the backport manually onto release line \`${BASE_TAG}\` (target version \`${NEW_TAG}\`).
 
@@ -354,4 +354,4 @@ jobs:
           PR_NUMBER=$(gh pr list --head "$TMP_BRANCH" --base "$BACKPORT_BRANCH" --json number --jq '.[0].number')
           echo "backport_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
-          gh pr comment "$SOURCE_PR_NUMBER" --body "Opened backport pull request #${PR_NUMBER} for \`${NEW_TAG}\` (from \`/backport ${BASE_TAG}\`)."
+          gh pr comment "$SOURCE_PR_NUMBER" --body "Opened backport pull request #${PR_NUMBER} for \`${NEW_TAG}\` (release line \`${BASE_TAG}\`)."
