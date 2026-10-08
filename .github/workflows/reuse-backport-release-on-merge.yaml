@@ -1,6 +1,8 @@
 # Reusable workflow: run TAO backport release after a backport PR is merged.
 #
-# Caller example (same repo as release workflow):
+# Caller example (same repo as release workflow). The calling job must grant
+# contents: write and pull-requests: write — nested reuse-auto-release-tao-extension
+# cannot exceed the caller job permission ceiling.
 #   on:
 #     pull_request:
 #       types: [closed]
@@ -11,6 +13,9 @@
 #         github.event_name == 'pull_request' &&
 #         github.event.pull_request.merged &&
 #         startsWith(github.event.pull_request.head.ref, 'tmp-backport-pr-')
+#       permissions:
+#         contents: write
+#         pull-requests: write
 #       uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-release-on-merge.yaml@main
 #       with:
 #         RELEASE_REF: ${{ github.event.pull_request.base.ref }}

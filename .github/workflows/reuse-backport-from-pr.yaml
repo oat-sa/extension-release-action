@@ -66,7 +66,7 @@ jobs:
     outputs:
       release_version: ${{ steps.plan.outputs.release_version }}
       backport_branch: ${{ steps.plan.outputs.backport_branch }}
-      backport_pr_number: ${{ steps.open_pr.outputs.backport_pr_number }}
+      backport_pr_number: ${{ steps.open_pr.outputs.backport_pr_number || steps.cherry_pick.outputs.existing_pr_number }}
 
     steps:
       - name: Checkout repository
@@ -246,6 +246,19 @@ jobs:
           TMP_BRANCH="tmp-backport-pr-${SOURCE_PR_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "TMP_BRANCH=${TMP_BRANCH}" >> "$GITHUB_ENV"
 
+          find_existing_backport_pr() {
+            gh pr list --base "$BACKPORT_BRANCH" --state open --json number,headRefName \
+              --jq "map(select(.headRefName | startswith(\"tmp-backport-pr-${SOURCE_PR_NUMBER}-\"))) | .[0].number // empty"
+          }
+
+          EXISTING="$(find_existing_backport_pr)"
+          if [ -n "$EXISTING" ]; then
+            echo "Open backport PR already exists for #${SOURCE_PR_NUMBER} -> ${BACKPORT_BRANCH}: #${EXISTING}"
+            echo "existing_pr_number=${EXISTING}" >> "$GITHUB_OUTPUT"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           git fetch origin "$BACKPORT_BRANCH" 2>/dev/null || true
           START_REF="refs/tags/${PARENT_REF}"
           if git rev-parse -q --verify "refs/remotes/origin/${BACKPORT_BRANCH}" >/dev/null; then
@@ -279,6 +292,14 @@ jobs:
 
           if [ "$CONFLICT" = "true" ]; then
             echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EXISTING="$(find_existing_backport_pr)"
+          if [ -n "$EXISTING" ]; then
+            echo "Open backport PR already exists for #${SOURCE_PR_NUMBER} -> ${BACKPORT_BRANCH}: #${EXISTING}"
+            echo "existing_pr_number=${EXISTING}" >> "$GITHUB_OUTPUT"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -318,7 +339,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          EXISTING=$(gh pr list --head "$TMP_BRANCH" --base "$BACKPORT_BRANCH" --state open --json number --jq '.[0].number // empty')
+          EXISTING="${{ steps.cherry_pick.outputs.existing_pr_number }}"
+          if [ -z "$EXISTING" ]; then
+            EXISTING=$(gh pr list --base "$BACKPORT_BRANCH" --state open --json number,headRefName \
+              --jq "map(select(.headRefName | startswith(\"tmp-backport-pr-${SOURCE_PR_NUMBER}-\"))) | .[0].number // empty")
+          fi
           if [ -n "$EXISTING" ]; then
             echo "Open backport PR already exists: #${EXISTING}"
             echo "backport_pr_number=${EXISTING}" >> "$GITHUB_OUTPUT"
@@ -351,7 +376,7 @@ jobs:
             --base "$BACKPORT_BRANCH" \
             --head "$TMP_BRANCH"
 
-          PR_NUMBER=$(gh pr list --head "$TMP_BRANCH" --base "$BACKPORT_BRANCH" --json number --jq '.[0].number')
+          PR_NUMBER=$(gh pr list --head "$TMP_BRANCH" --base "$BACKPORT_BRANCH" --state open --json number --jq '.[0].number')
           echo "backport_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
           gh pr comment "$SOURCE_PR_NUMBER" --body "Opened backport pull request #${PR_NUMBER} for \`${NEW_TAG}\` (release line \`${BASE_TAG}\`)."

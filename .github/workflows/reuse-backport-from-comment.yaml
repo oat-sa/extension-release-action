@@ -31,7 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event.issue.pull_request != null &&
-      startsWith(github.event.comment.body, '/backport ')
+      startsWith(github.event.comment.body, '/backport ') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     outputs:
       proceed: ${{ steps.validate.outputs.proceed }}
       base_tag: ${{ steps.validate.outputs.base_tag }}
