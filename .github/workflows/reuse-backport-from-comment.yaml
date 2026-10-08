@@ -91,8 +91,20 @@ jobs:
             skip "Comment does not match /backport <tag>. Skipping."
           fi
 
-          MERGED="$(gh pr view "$SOURCE_PR_NUMBER" --repo "${{ github.repository }}" --json merged --jq '.merged' 2>/dev/null || echo false)"
-          if [ "$MERGED" != "true" ]; then
+          if ! PR_JSON="$(gh pr view "$SOURCE_PR_NUMBER" --repo "${{ github.repository }}" --json state,mergedAt 2>&1)"; then
+            echo "::error::Could not load pull request #${SOURCE_PR_NUMBER}: ${PR_JSON}"
+            exit 1
+          fi
+
+          PR_STATE="$(printf '%s' "$PR_JSON" | jq -r '.state // empty')"
+          MERGED_AT="$(printf '%s' "$PR_JSON" | jq -r '.mergedAt // empty')"
+          IS_MERGED=false
+          if [ "$PR_STATE" = "MERGED" ]; then
+            IS_MERGED=true
+          elif [ -n "$MERGED_AT" ] && [ "$MERGED_AT" != "null" ]; then
+            IS_MERGED=true
+          fi
+          if [ "$IS_MERGED" != "true" ]; then
             skip "Pull request #${SOURCE_PR_NUMBER} is not merged. Backport runs only after merge."
           fi
 
