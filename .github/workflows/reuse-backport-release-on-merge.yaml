@@ -1,0 +1,143 @@
+# Reusable workflow: run TAO backport release after a backport PR is merged.
+#
+# Caller example (same repo as release workflow):
+#   on:
+#     pull_request:
+#       types: [closed]
+#   jobs:
+#     release:
+#       if: |
+#         github.event.pull_request.merged == true &&
+#         startsWith(github.event.pull_request.base.ref, 'backport/') &&
+#         startsWith(github.event.pull_request.head.ref, 'tmp-backport-pr-')
+#       uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-release-on-merge.yaml@main
+#       with:
+#         RELEASE_REF: ${{ github.event.pull_request.base.ref }}
+#         TAO_EXTENSION_NAME: my-extension
+#       secrets: inherit
+#
+name: Backport release after merge (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      RELEASE_REF:
+        description: 'Backport branch that received the merge (e.g. backport/1.2.4).'
+        required: true
+        type: string
+      RELEASE_VERSION:
+        description: 'Release version/tag without required prefix when VERSION_PREFIX is set. Defaults to the segment after backport/ in RELEASE_REF.'
+        required: false
+        type: string
+        default: ''
+      VERSION_PREFIX:
+        description: 'Version tag prefix (e.g. "v").'
+        required: false
+        type: string
+        default: 'v'
+      DEV_BRANCH:
+        required: false
+        type: string
+        default: develop
+      MAIN_BRANCH:
+        required: false
+        type: string
+        default: master
+      BOT_USER_NAME:
+        required: false
+        type: string
+        default: oat-github-bot
+      BOT_USER_EMAIL:
+        required: false
+        type: string
+        default: oat-github-bot@taotesting.com
+      TAO_EXTENSION_NAME:
+        required: true
+        type: string
+      TAO_EXTENSION_PATH:
+        required: false
+        type: string
+        default: ''
+      TAO_ROOT_PATH:
+        required: false
+        type: string
+        default: '.'
+      TAO_BUILD_FE:
+        required: false
+        type: string
+        default: auto
+      TAO_BUILD_LOCALE:
+        required: false
+        type: string
+        default: auto
+      NODE_VERSION:
+        required: false
+        type: string
+        default: '18'
+      PHP_VERSION:
+        required: false
+        type: string
+        default: '8.3'
+      SLACK_NOTIFICATION:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      SEMVER_GH_TOKEN:
+        required: false
+      CI_NPM_READ_TOKEN:
+        required: false
+      SEMVER_SLACK_TOKEN:
+        required: false
+      SEMVER_SLACK_CHANNEL:
+        required: false
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.resolve.outputs.release_version }}
+    steps:
+      - name: Resolve RELEASE_VERSION
+        id: resolve
+        env:
+          RELEASE_REF: ${{ inputs.RELEASE_REF }}
+          RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$RELEASE_VERSION" ]; then
+            printf '%s' "$RELEASE_VERSION" > /tmp/release_version.txt
+          elif [[ "$RELEASE_REF" =~ ^backport/(.+)$ ]]; then
+            printf '%s' "${BASH_REMATCH[1]}" > /tmp/release_version.txt
+          else
+            echo "::error::RELEASE_VERSION is empty and RELEASE_REF '${RELEASE_REF}' is not a backport/* branch."
+            exit 1
+          fi
+
+          echo "release_version=$(tr -d '[:space:]' < /tmp/release_version.txt)" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: resolve-version
+    uses: ./.github/workflows/reuse-auto-release-tao-extension.yaml
+    with:
+      ENABLED: true
+      BACKPORT: true
+      RELEASE_REF: ${{ inputs.RELEASE_REF }}
+      RELEASE_VERSION: ${{ needs.resolve-version.outputs.release_version }}
+      VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
+      DEV_BRANCH: ${{ inputs.DEV_BRANCH }}
+      MAIN_BRANCH: ${{ inputs.MAIN_BRANCH }}
+      BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+      BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+      SKIP_MERGE_BACK: true
+      SINGLE_RELEASE_PR: true
+      TAO_EXTENSION_NAME: ${{ inputs.TAO_EXTENSION_NAME }}
+      TAO_EXTENSION_PATH: ${{ inputs.TAO_EXTENSION_PATH }}
+      TAO_ROOT_PATH: ${{ inputs.TAO_ROOT_PATH }}
+      TAO_BUILD_FE: ${{ inputs.TAO_BUILD_FE }}
+      TAO_BUILD_LOCALE: ${{ inputs.TAO_BUILD_LOCALE }}
+      NODE_VERSION: ${{ inputs.NODE_VERSION }}
+      PHP_VERSION: ${{ inputs.PHP_VERSION }}
+      SLACK_NOTIFICATION: ${{ inputs.SLACK_NOTIFICATION }}
+    secrets: inherit

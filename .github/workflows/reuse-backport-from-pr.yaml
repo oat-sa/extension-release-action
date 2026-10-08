@@ -1,0 +1,357 @@
+# Reusable backport workflow (call from issue_comment on pull requests).
+#
+# Caller example:
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     backport:
+#       if: github.event.issue.pull_request && contains(github.event.comment.body, '/backport')
+#       uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-pr.yaml@main
+#       with:
+#         SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
+#         BASE_TAG: ${{ ... parse /backport v1.2.3 from comment ... }}
+#       secrets: inherit
+#
+name: Backport pull request to release line (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      SOURCE_PR_NUMBER:
+        description: 'Pull request number whose commits should be backported.'
+        required: true
+        type: number
+      BASE_TAG:
+        description: 'Release line tag to backport onto (e.g. v1.2.3 from `/backport v1.2.3`).'
+        required: true
+        type: string
+      VERSION_PREFIX:
+        description: 'Version tag prefix (e.g. "v").'
+        required: false
+        type: string
+        default: 'v'
+      RELEASE_VERSION:
+        description: 'Optional explicit next release tag/version. When empty, the next tag on the release line after BASE_TAG is computed automatically.'
+        required: false
+        type: string
+        default: ''
+      BOT_USER_NAME:
+        description: 'Git bot user name for commits.'
+        required: false
+        type: string
+        default: oat-github-bot
+      BOT_USER_EMAIL:
+        description: 'Git bot user email for commits.'
+        required: false
+        type: string
+        default: oat-github-bot@taotesting.com
+    secrets:
+      SEMVER_GH_TOKEN:
+        description: 'Token with contents and pull-request write access.'
+        required: false
+
+concurrency:
+  group: backport-from-pr-${{ github.repository }}-${{ inputs.SOURCE_PR_NUMBER }}-${{ inputs.BASE_TAG }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    name: Cherry-pick and open backport PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    outputs:
+      release_version: ${{ steps.plan.outputs.release_version }}
+      backport_branch: ${{ steps.plan.outputs.backport_branch }}
+      backport_pr_number: ${{ steps.open_pr.outputs.backport_pr_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan backport branch and version
+        id: plan
+        env:
+          VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
+          BASE_TAG_INPUT: ${{ inputs.BASE_TAG }}
+          RELEASE_VERSION_INPUT: ${{ inputs.RELEASE_VERSION }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$VERSION_PREFIX" ]; then
+            PATTERN="^${VERSION_PREFIX}[0-9]+(\.[0-9]+){2,3}(-patch[0-9]+)?$"
+          else
+            PATTERN="^[0-9]+(\.[0-9]+){2,3}(-patch[0-9]+)?$"
+          fi
+
+          normalize_tag() {
+            local version="$1"
+
+            if echo "$version" | grep -Eq "$PATTERN"; then
+              printf '%s' "$version"
+              return 0
+            fi
+
+            if [ -n "$VERSION_PREFIX" ] && echo "${VERSION_PREFIX}${version}" | grep -Eq "$PATTERN"; then
+              printf '%s' "${VERSION_PREFIX}${version}"
+              return 0
+            fi
+
+            return 1
+          }
+
+          tag_core_without_suffix() {
+            local tag="$1"
+            local core="$tag"
+
+            if echo "$tag" | grep -Eq '(-patch[0-9]+)$'; then
+              core="${tag%$(echo "$tag" | sed -nE 's/.*(-patch[0-9]+)$/\1/p')}"
+            fi
+
+            printf '%s' "$core"
+          }
+
+          next_backport_tag() {
+            local latest_tag="$1"
+            local anchor="$2"
+            local core
+            local without_prefix
+            local segment_count
+            local fourth
+            local suffix=""
+
+            if echo "$latest_tag" | grep -Eq '(-patch[0-9]+)$'; then
+              suffix="$(echo "$latest_tag" | sed -nE 's/.*(-patch[0-9]+)$/\1/p')"
+            fi
+
+            core="$(tag_core_without_suffix "$latest_tag")"
+            without_prefix="${core#"$VERSION_PREFIX"}"
+            segment_count="$(printf '%s' "$without_prefix" | tr '.' '\n' | grep -c .)"
+
+            if [ "$segment_count" -le 3 ]; then
+              printf '%s%s.1%s' "$VERSION_PREFIX" "$anchor" "$suffix"
+              return 0
+            fi
+
+            fourth="$(printf '%s' "$without_prefix" | cut -d. -f4)"
+            printf '%s%s.%s%s' "$VERSION_PREFIX" "$anchor" "$((fourth + 1))" "$suffix"
+          }
+
+          is_backport_family_tag() {
+            local tag="$1"
+            local family_prefix="$2"
+            local core
+            local without_prefix
+            local segment_count
+
+            core="$(tag_core_without_suffix "$tag")"
+            case "$core" in
+              "$family_prefix") return 0 ;;
+              "${family_prefix}".*) ;;
+              *) return 1 ;;
+            esac
+
+            without_prefix="${core#"$VERSION_PREFIX"}"
+            segment_count="$(printf '%s' "$without_prefix" | tr '.' '\n' | grep -c .)"
+            if [ "$segment_count" -eq 4 ]; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          BASE_TAG="$(normalize_tag "$BASE_TAG_INPUT" || true)"
+          if [ -z "$BASE_TAG" ]; then
+            echo "::error::BASE_TAG '${BASE_TAG_INPUT}' does not match expected version pattern."
+            exit 1
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/${BASE_TAG}" >/dev/null; then
+            echo "::error::BASE_TAG '${BASE_TAG}' does not exist."
+            exit 1
+          fi
+
+          BASE_CORE="$(tag_core_without_suffix "$BASE_TAG")"
+          WITHOUT_PREFIX="${BASE_CORE#"$VERSION_PREFIX"}"
+          ANCHOR="$(printf '%s' "$WITHOUT_PREFIX" | cut -d. -f1-3)"
+          FAMILY_PREFIX="${VERSION_PREFIX}${ANCHOR}"
+
+          LATEST_ON_LINE="$FAMILY_PREFIX"
+          if ! git rev-parse -q --verify "refs/tags/${LATEST_ON_LINE}" >/dev/null; then
+            LATEST_ON_LINE="$BASE_TAG"
+          fi
+
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            if ! is_backport_family_tag "$tag" "$FAMILY_PREFIX"; then
+              continue
+            fi
+
+            if [ "$(printf '%s\n%s\n' "$LATEST_ON_LINE" "$tag" | sort -V | tail -n 1)" = "$tag" ]; then
+              LATEST_ON_LINE="$tag"
+            fi
+          done < <(git tag -l | { grep -E "$PATTERN" || true; } | sort -V)
+
+          if [ -n "$RELEASE_VERSION_INPUT" ]; then
+            NEW_TAG="$(normalize_tag "$RELEASE_VERSION_INPUT" || true)"
+            if [ -z "$NEW_TAG" ]; then
+              echo "::error::RELEASE_VERSION '${RELEASE_VERSION_INPUT}' does not match expected version pattern."
+              exit 1
+            fi
+            if ! is_backport_family_tag "$NEW_TAG" "$FAMILY_PREFIX"; then
+              echo "::error::RELEASE_VERSION '${NEW_TAG}' is not a backport on release line '${FAMILY_PREFIX}.x'."
+              exit 1
+            fi
+          else
+            NEW_TAG="$(next_backport_tag "$LATEST_ON_LINE" "$ANCHOR")"
+          fi
+
+          if git rev-parse -q --verify "refs/tags/${NEW_TAG}" >/dev/null; then
+            echo "::error::Target release tag '${NEW_TAG}' already exists."
+            exit 1
+          fi
+
+          BACKPORT_BRANCH="backport/${NEW_TAG#"$VERSION_PREFIX"}"
+          PARENT_REF="$LATEST_ON_LINE"
+
+          echo "BASE_TAG=${BASE_TAG}" >> "$GITHUB_ENV"
+          echo "NEW_TAG=${NEW_TAG}" >> "$GITHUB_ENV"
+          echo "BACKPORT_BRANCH=${BACKPORT_BRANCH}" >> "$GITHUB_ENV"
+          echo "PARENT_REF=${PARENT_REF}" >> "$GITHUB_ENV"
+          echo "release_version=${NEW_TAG#"$VERSION_PREFIX"}" >> "$GITHUB_OUTPUT"
+          echo "backport_branch=${BACKPORT_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          echo "Backport plan: parent ${PARENT_REF} -> ${BACKPORT_BRANCH} (release ${NEW_TAG})"
+
+      - name: Cherry-pick pull request commits
+        id: cherry_pick
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+          BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
+          BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          git config --global user.name "$BOT_USER_NAME"
+          git config --global user.email "$BOT_USER_EMAIL"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          TMP_BRANCH="tmp-backport-pr-${SOURCE_PR_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "TMP_BRANCH=${TMP_BRANCH}" >> "$GITHUB_ENV"
+
+          git fetch origin "$BACKPORT_BRANCH" 2>/dev/null || true
+          START_REF="refs/tags/${PARENT_REF}"
+          if git rev-parse -q --verify "refs/remotes/origin/${BACKPORT_BRANCH}" >/dev/null; then
+            START_REF="refs/remotes/origin/${BACKPORT_BRANCH}"
+          else
+            git fetch origin "refs/tags/${PARENT_REF}:refs/tags/${PARENT_REF}"
+            git checkout -B "$BACKPORT_BRANCH" "refs/tags/${PARENT_REF}"
+            git push origin "$BACKPORT_BRANCH"
+          fi
+
+          git checkout -B "$TMP_BRANCH" "$START_REF"
+
+          > /tmp/backport_commits.txt
+          gh api "/repos/${{ github.repository }}/pulls/${SOURCE_PR_NUMBER}/commits" --paginate --jq '.[].sha' >> /tmp/backport_commits.txt
+
+          if [ ! -s /tmp/backport_commits.txt ]; then
+            echo "::error::Pull request #${SOURCE_PR_NUMBER} has no commits to backport."
+            exit 1
+          fi
+
+          CONFLICT=false
+          while read -r sha || [ -n "$sha" ]; do
+            [ -z "$sha" ] && continue
+            if git cherry-pick -x "$sha"; then
+              continue
+            fi
+            CONFLICT=true
+            git cherry-pick --abort || true
+            break
+          done < /tmp/backport_commits.txt
+
+          if [ "$CONFLICT" = "true" ]; then
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git push origin --delete "$TMP_BRANCH" 2>/dev/null || true
+          git push origin "$TMP_BRANCH"
+          echo "conflict=false" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on source pull request when cherry-pick fails
+        if: steps.cherry_pick.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+        run: |
+          set -euo pipefail
+
+          BODY="$(cat <<EOF
+          :warning: **Automatic backport failed**
+
+          The \`/backport ${BASE_TAG}\` request could not be applied automatically (cherry-pick conflict).
+
+          Please create the backport manually onto release line \`${BASE_TAG}\` (target version \`${NEW_TAG}\`).
+
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )"
+
+          gh pr comment "$SOURCE_PR_NUMBER" --body "$BODY"
+          echo "::error::Cherry-pick conflict while backporting PR #${SOURCE_PR_NUMBER} to ${BASE_TAG}."
+          exit 1
+
+      - name: Open backport pull request
+        id: open_pr
+        if: steps.cherry_pick.outputs.conflict != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
+          SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+        run: |
+          set -euo pipefail
+
+          EXISTING=$(gh pr list --head "$TMP_BRANCH" --base "$BACKPORT_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Open backport PR already exists: #${EXISTING}"
+            echo "backport_pr_number=${EXISTING}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SOURCE_TITLE=$(gh pr view "$SOURCE_PR_NUMBER" --json title --jq '.title')
+          BODY="$(cat <<EOF
+          Automated backport of #${SOURCE_PR_NUMBER} onto \`${BASE_TAG}\`.
+
+          - Source PR: #${SOURCE_PR_NUMBER} — ${SOURCE_TITLE}
+          - Release line tag: \`${BASE_TAG}\`
+          - Target release: \`${NEW_TAG}\`
+          - Backport branch: \`${BACKPORT_BRANCH}\`
+
+          Merge this pull request after validation to trigger the backport release workflow (\`BACKPORT=true\`).
+
+          <!-- extension-release-action-backport
+          source_pr=${SOURCE_PR_NUMBER}
+          base_tag=${BASE_TAG}
+          release_version=${NEW_TAG}
+          backport_branch=${BACKPORT_BRANCH}
+          -->
+          EOF
+          )"
+
+          gh pr create \
+            --title "Backport #${SOURCE_PR_NUMBER} to ${NEW_TAG} [skip ci]" \
+            --body "$BODY" \
+            --base "$BACKPORT_BRANCH" \
+            --head "$TMP_BRANCH"
+
+          PR_NUMBER=$(gh pr list --head "$TMP_BRANCH" --base "$BACKPORT_BRANCH" --json number --jq '.[0].number')
+          echo "backport_pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+          gh pr comment "$SOURCE_PR_NUMBER" --body "Opened backport pull request #${PR_NUMBER} for \`${NEW_TAG}\` (from \`/backport ${BASE_TAG}\`)."
