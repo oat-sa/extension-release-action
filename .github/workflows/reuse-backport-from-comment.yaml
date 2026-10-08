@@ -1,69 +1,37 @@
-# Reusable entrypoint: parse `/backport v1.2.3` from a PR comment and run reuse-backport-from-pr.
-# Runs only for a human user's single-line `/backport <tag>` on a merged pull request.
+# Reusable backport via `/backport <tag>` — same contract as oat-sa/backport-action:
+# https://github.com/oat-sa/backport-action/blob/main/.github/workflows/backport-on-comment.yml
 #
-# Caller `backport.yml` — use this `if` so bots and unrelated comments never call this workflow:
-#   backport-from-comment:
-#     if: |
-#       github.event_name == 'issue_comment' &&
-#       github.event.issue.pull_request &&
-#       github.event.comment.user.type == 'User' &&
-#       !endsWith(github.event.comment.user.login, '[bot]') &&
-#       startsWith(github.event.comment.body, '/backport')
-#     uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-comment.yaml@main
-#     with:
-#       COMMENT_BODY: ${{ github.event.comment.body }}
-#       COMMENT_USER_TYPE: ${{ github.event.comment.user.type }}
-#       COMMENT_USER_LOGIN: ${{ github.event.comment.user.login }}
-#       SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
-#     secrets: inherit
+# Consumer stub (no `with:` — event context is forwarded automatically):
+#
+#   name: Backport trigger
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     backport:
+#       uses: oat-sa/extension-release-action/.github/workflows/reuse-backport-from-comment.yaml@main
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#       secrets: inherit
 #
 name: Backport from PR comment (Reusable)
 
 on:
   workflow_call:
-    inputs:
-      COMMENT_BODY:
-        description: 'Comment body; must be a `/backport <tag>` command (see gate validation).'
-        required: true
-        type: string
-      COMMENT_USER_TYPE:
-        description: 'Pass github.event.comment.user.type from the caller (must be User).'
-        required: true
-        type: string
-      COMMENT_USER_LOGIN:
-        description: 'Pass github.event.comment.user.login from the caller (used to ignore bots such as coderabbitai[bot]).'
-        required: true
-        type: string
-      SOURCE_PR_NUMBER:
-        description: 'Pull request number the comment was posted on.'
-        required: true
-        type: number
-      VERSION_PREFIX:
-        required: false
-        type: string
-        default: 'v'
-      RELEASE_VERSION:
-        required: false
-        type: string
-        default: ''
-      BOT_USER_NAME:
-        required: false
-        type: string
-        default: oat-github-bot
-      BOT_USER_EMAIL:
-        required: false
-        type: string
-        default: oat-github-bot@taotesting.com
-    secrets:
-      SEMVER_GH_TOKEN:
-        required: false
+    inputs: {}
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   gate:
     name: Validate /backport on merged PR
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
+    if: |
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/backport ')
     outputs:
       proceed: ${{ steps.validate.outputs.proceed }}
       base_tag: ${{ steps.validate.outputs.base_tag }}
@@ -71,10 +39,8 @@ jobs:
       - name: Parse command and check pull request is merged
         id: validate
         env:
-          COMMENT_BODY: ${{ inputs.COMMENT_BODY }}
-          COMMENT_USER_TYPE: ${{ inputs.COMMENT_USER_TYPE }}
-          COMMENT_USER_LOGIN: ${{ inputs.COMMENT_USER_LOGIN }}
-          SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
           GH_TOKEN: ${{ secrets.SEMVER_GH_TOKEN || github.token }}
         run: |
           set -euo pipefail
@@ -85,32 +51,7 @@ jobs:
             exit 0
           }
 
-          is_ignored_bot_comment() {
-            case "$COMMENT_USER_LOGIN" in
-              coderabbitai[bot]|coderabbit[bot]|github-actions[bot]|*'[bot]')
-                return 0
-                ;;
-            esac
-            if [ "$COMMENT_USER_TYPE" = "Bot" ]; then
-              return 0
-            fi
-            return 1
-          }
-
-          if is_ignored_bot_comment; then
-            skip "Ignoring comment from bot ${COMMENT_USER_LOGIN}."
-          fi
-
-          if [ "$COMMENT_USER_TYPE" != "User" ]; then
-            skip "Backport commands must be posted by a human user (comment user.type=${COMMENT_USER_TYPE})."
-          fi
-
-          FIRST_LINE="$(printf '%s' "$COMMENT_BODY" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if ! echo "$FIRST_LINE" | grep -qE '^/backport[[:space:]]+[^[:space:]]+$'; then
-            skip "Comment must be a single-line /backport <tag> command (example: /backport v1.2.3)."
-          fi
-
-          BASE_TAG="$(echo "$FIRST_LINE" | sed -nE 's#^/backport[[:space:]]+([^[:space:]]+).*#\1#p')"
+          BASE_TAG="$(printf '%s' "$COMMENT_BODY" | sed -n 's#^/backport[[:space:]]\+\([^[:space:]]\+\).*#\1#p')"
           if [ -z "$BASE_TAG" ]; then
             skip "Comment is not a valid /backport <tag> command. Skipping."
           fi
@@ -140,15 +81,8 @@ jobs:
     name: Run backport
     needs: gate
     if: needs.gate.outputs.proceed == 'true'
-    permissions:
-      contents: write
-      pull-requests: write
     uses: ./.github/workflows/reuse-backport-from-pr.yaml
     with:
-      SOURCE_PR_NUMBER: ${{ inputs.SOURCE_PR_NUMBER }}
+      SOURCE_PR_NUMBER: ${{ github.event.issue.number }}
       BASE_TAG: ${{ needs.gate.outputs.base_tag }}
-      VERSION_PREFIX: ${{ inputs.VERSION_PREFIX }}
-      RELEASE_VERSION: ${{ inputs.RELEASE_VERSION }}
-      BOT_USER_NAME: ${{ inputs.BOT_USER_NAME }}
-      BOT_USER_EMAIL: ${{ inputs.BOT_USER_EMAIL }}
     secrets: inherit
